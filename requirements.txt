@@ -1,0 +1,3 @@
+numpy
+Pillow
+sam2  # Assuming sam2 is the library containing SAM2Model
