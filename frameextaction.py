@@ -164,13 +164,13 @@ def video_to_frames(video_path, frames_dir, overwrite=False, every=1, chunk_size
 if __name__ == "__main__":
     # test it
     videopath = flor.arg(
-        "videopath",
-        os.path.join(os.getcwd(), "Videos", "The Plague Recording NIKON.MOV"),
+        "video_path",
+        "Videos/The Plague Recording NIKON.mov",
     )
 
     video_to_frames(
         video_path=videopath,
-        frames_dir="test_frames",
+        frames_dir=flor.arg("out_path", "test_frames"),
         overwrite=False,
         every=30,
         chunk_size=1000,

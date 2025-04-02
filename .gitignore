@@ -1,3 +1,5 @@
+# macOS system files
+.DS_Store
 Videos/
 test_frames/
 # Byte-compiled / optimized / DLL files
