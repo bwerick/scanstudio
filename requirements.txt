@@ -2,3 +2,4 @@ Pillow==10.1.0
 flordb>=3.4.3
 torch
 python-doctr[torch]
+opencv-python

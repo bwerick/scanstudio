@@ -12,7 +12,7 @@ import torch
 
 df = flor.dataframe("out_path")
 df = flor.utils.latest(df[df["filename"] == "frameextraction.py"])
-DOC_DIR = df.values[0]
+DOC_DIR = str(df["out_path"].values[0])
 
 # Determine the device based on the operating system
 if platform.system() == "Darwin":

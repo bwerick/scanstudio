@@ -1,5 +1,8 @@
 .PHONY: install frameextraction parseOCR
 
+install_opencv:
+	apt-get update && apt-get install -y python3-opencv
+
 install:
 	pip install -r requirements.txt
 
