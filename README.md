@@ -22,8 +22,6 @@ Once the videos are in the appropriate directory, simply execute the following c
 make parse_OCR
 ```
 
-### Example
-
 ### Example: Parsing OCR data from a sample video
 
 To parse OCR data from a sample video, follow these steps:
