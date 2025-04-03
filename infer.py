@@ -1,47 +1,59 @@
 import os
-import numpy as np
-from sam2 import SAM2Model  # Assuming SAM2Model is the model class from the SAM2 library
+from app import IMGS_DIR
+import flor
+import torch
 from PIL import Image
 
-def load_images(image_dir, batch_size=8):
-    image_files = [os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.endswith(('.png', '.jpg', '.jpeg'))]
-    batches = [image_files[i:i + batch_size] for i in range(0, len(image_files), batch_size)]
-    return batches
-
-def preprocess_image(image_path):
-    image = Image.open(image_path)
-    image = image.resize((256, 256))  # Resize to the input size expected by the model
-    image = np.array(image) / 255.0  # Normalize the image
-    return image
-
-def postprocess_result(result):
-    # Assuming result is a numpy array with segmentation masks
-    return (result * 255).astype(np.uint8)
-
-def save_result(result, output_path):
-    result_image = Image.fromarray(result)
-    result_image.save(output_path)
-
-def infer_batch(model, image_batch):
-    preprocessed_images = [preprocess_image(img_path) for img_path in image_batch]
-    preprocessed_images = np.stack(preprocessed_images, axis=0)
-    results = model.predict(preprocessed_images)
-    return results
-
-def main(image_dir, output_dir):
-    model = SAM2Model()  # Initialize the model
-    model.load_weights('path/to/weights')  # Load pre-trained weights
-
-    image_batches = load_images(image_dir)
-    for batch_idx, image_batch in enumerate(image_batches):
-        results = infer_batch(model, image_batch)
-        for img_idx, result in enumerate(results):
-            output_path = os.path.join(output_dir, f'result_{batch_idx * 8 + img_idx}.png')
-            postprocessed_result = postprocess_result(result)
-            save_result(postprocessed_result, output_path)
-
 if __name__ == "__main__":
-    image_dir = '/path/to/images'
-    output_dir = '/path/to/output'
-    os.makedirs(output_dir, exist_ok=True)
-    main(image_dir, output_dir)
+    from app.config import device, page_path, first_page
+    from train import model, transform
+
+    # Set the device for running the model
+    device = torch.device(flor.arg("device", device))
+
+    # Check if the model file exists and load it
+    if os.path.exists("model.pth"):
+        # Load the saved model state
+        state_dict = torch.load("model.pth", map_location=device)
+        model.load_state_dict(state_dict)
+
+    # Check if the directory with images exists
+    if os.path.exists(IMGS_DIR):
+        # Preparing the model for inference
+        model = model.to(device)
+        model.eval()
+        # Construct a list of directories in IMGS_DIR
+        imgs_dir = [
+            os.path.join(os.path.abspath(IMGS_DIR), fn) for fn in os.listdir(IMGS_DIR)
+        ]
+        # Filter to retain only directories
+        imgs_dir = [fp for fp in imgs_dir if os.path.isdir(fp)]
+        # Iterate over each directory for inference
+        for abs_path in flor.loop("document", sorted(imgs_dir)):
+            # Process each page within the directory
+            pages_dir = [os.path.join(abs_path, pn) for pn in os.listdir(abs_path)]
+            # Sort the pages to maintain the correct order
+            pages_dir = sorted(
+                pages_dir,
+                key=lambda fn: int(
+                    (os.path.splitext(os.path.basename(fn))[0]).replace("page_", "")
+                ),
+            )
+            for i, image_path in flor.loop("page", enumerate(pages_dir)):
+                flor.log(page_path, image_path)  # Logging the path of each image/page
+                # Open the image and apply transformations
+                image = Image.open(image_path)
+                # Convert image to tensor
+                input_tensor = transform(image).unsqueeze(0).to(device)  # type: ignore
+                # TODO: inference in batches
+                # Perform inference on the image
+                with torch.no_grad():
+                    output = model(input_tensor)
+                    logits, predicted = torch.max(
+                        output.data, 1
+                    )  # Obtain the most likely prediction
+                    predicted_label = (
+                        predicted.item()
+                    )  # Extract the predicted label (integer index)
+                # Log the predicted label, with special handling for the first page
+                flor.log(first_page, 1 if i == 0 else int(predicted_label))
