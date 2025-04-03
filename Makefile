@@ -18,3 +18,5 @@ frameextraction:
 parse_OCR: frameextraction
 	python frame_ocr.py
 
+clean:
+	rm -rf test_frames
