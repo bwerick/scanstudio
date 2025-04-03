@@ -1,10 +1,11 @@
-.PHONY: prefix all
-
-all: prefix
-	echo "world"
+.PHONY: install frameextraction parseOCR
 
 install:
-	pip install -r requirements.txt
+    pip install -r requirements.txt
 
-prefix:
-	echo "hello"
+frameextraction:
+    python frameextraction.py
+
+parse_OCR: frameextraction
+    python frame_ocr.py
+
