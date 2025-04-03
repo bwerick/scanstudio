@@ -1,3 +1,4 @@
-numpy
-Pillow
-sam2  # Assuming sam2 is the library containing SAM2Model
+Pillow==10.1.0
+flordb>=3.4.3
+torch
+python-doctr[torch]

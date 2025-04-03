@@ -1,11 +1,11 @@
 .PHONY: install frameextraction parseOCR
 
 install:
-    pip install -r requirements.txt
+	pip install -r requirements.txt
 
 frameextraction:
-    python frameextraction.py
+	python frameextraction.py
 
 parse_OCR: frameextraction
-    python frame_ocr.py
+	python frame_ocr.py
 
