@@ -1,4 +1,3 @@
-import fitz
 import os
 from PIL import Image
 import platform
@@ -11,7 +10,9 @@ from doctr.io import DocumentFile
 from doctr.models import ocr_predictor
 import torch
 
-DOC_DIR = "test_frames"
+df = flor.dataframe("out_path")
+df = flor.utils.latest(df[df["filename"] == "frameextraction.py"])
+DOC_DIR = df.values[0]
 
 # Determine the device based on the operating system
 if platform.system() == "Darwin":
@@ -26,6 +27,9 @@ if __name__ == "__main__":
 
     for v in flor.loop("video", os.listdir(DOC_DIR)):
         frames = os.path.join(DOC_DIR, v)
+        # skip hidden files
+        if frames.startswith(".") or not os.path.isdir(frames):
+            continue
         for frame in flor.loop("frame", os.listdir(frames)):
             img_path = os.path.join(frames, frame)
 
