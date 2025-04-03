@@ -3,7 +3,6 @@ import os
 from PIL import Image
 import platform
 
-from app.constants import DOC_DIR
 import io
 import time
 
@@ -12,6 +11,8 @@ import numpy as np
 from doctr.io import DocumentFile
 from doctr.models import ocr_predictor
 import torch
+
+DOC_DIR = "test_frames"
 
 
 def resize_image(image_path, max_size=(300, 300)):
