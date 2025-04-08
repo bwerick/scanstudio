@@ -1,7 +1,7 @@
 [
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-08T00:55:40",
+    "tstamp": "2025-04-08T00:57:11",
     "filename": "frameextraction.py",
     "ctx": null,
     "name": "out_path",
@@ -10,20 +10,20 @@
   },
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-08T00:55:40",
+    "tstamp": "2025-04-08T00:57:11",
     "filename": "frameextraction.py",
     "ctx": null,
     "name": "delta::loop",
-    "value": 0.000780167003540555,
+    "value": 8.869056166997325,
     "type": 3
   },
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-08T00:55:40",
+    "tstamp": "2025-04-08T00:57:11",
     "filename": "frameextraction.py",
     "ctx": null,
     "name": "delta::suffix",
-    "value": 0.26092283300022245,
+    "value": 9.128144916001474,
     "type": 3
   }
 ]
