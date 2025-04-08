@@ -172,6 +172,7 @@ if __name__ == "__main__":
                 video_path=video_path,
                 frames_dir=frames_dir,
                 overwrite=False,
-                every=30,
+                every=45,
                 chunk_size=1000,
             )
+            
