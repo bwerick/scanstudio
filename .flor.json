@@ -1,12 +1,12 @@
 [
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-08T13:16:45",
+    "tstamp": "2025-04-08T13:18:19",
     "filename": "easyframe_ocr.py",
     "ctx": {
-      "ctx_id": 6835291291884014895,
+      "ctx_id": 8469430485764037855,
       "p_ctx": {
-        "ctx_id": 6220540921775050198,
+        "ctx_id": -8773031513131491639,
         "p_ctx": null,
         "name": "video",
         "iteration": 2,
@@ -22,12 +22,12 @@
   },
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-08T13:16:45",
+    "tstamp": "2025-04-08T13:18:19",
     "filename": "easyframe_ocr.py",
     "ctx": {
-      "ctx_id": 5705118220115664858,
+      "ctx_id": -6772145811485223056,
       "p_ctx": {
-        "ctx_id": 6220540921775050198,
+        "ctx_id": -8773031513131491639,
         "p_ctx": null,
         "name": "video",
         "iteration": 2,
@@ -43,12 +43,12 @@
   },
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-08T13:16:45",
+    "tstamp": "2025-04-08T13:18:19",
     "filename": "easyframe_ocr.py",
     "ctx": {
-      "ctx_id": -3674221729678086552,
+      "ctx_id": -8791807302961374201,
       "p_ctx": {
-        "ctx_id": 6220540921775050198,
+        "ctx_id": -8773031513131491639,
         "p_ctx": null,
         "name": "video",
         "iteration": 2,
@@ -64,12 +64,12 @@
   },
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-08T13:16:45",
+    "tstamp": "2025-04-08T13:18:19",
     "filename": "easyframe_ocr.py",
     "ctx": {
-      "ctx_id": 311986421552056328,
+      "ctx_id": 1172181881065475666,
       "p_ctx": {
-        "ctx_id": 6220540921775050198,
+        "ctx_id": -8773031513131491639,
         "p_ctx": null,
         "name": "video",
         "iteration": 2,
@@ -80,7 +80,7 @@
       "value": ".DS_Store"
     },
     "name": "delta::suffix",
-    "value": 6.418502917000296,
+    "value": 5.928709499999968,
     "type": 3
   }
 ]
