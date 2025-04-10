@@ -12,7 +12,9 @@ import torch
 
 df = flor.dataframe("out_path")
 df = flor.utils.latest(df[df["filename"] == "frameextraction.py"])
+assert df.empty == False, "No output path found in dataframe"
 DOC_DIR = str(df["out_path"].values[0])
+
 
 # Determine the device based on the operating system
 if platform.system() == "Darwin":
@@ -35,7 +37,7 @@ if __name__ == "__main__":
             
             result = ""
             for (bbox, text, prob) in result:
-                result = text
+                result += text
             flor.log("text", result)
 
     print("Frame-by-frame OCR Done!")
