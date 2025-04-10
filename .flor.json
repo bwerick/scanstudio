@@ -1,12 +1,12 @@
 [
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
+    "tstamp": "2025-04-10T12:58:15",
     "filename": "easyframe_ocr.py",
     "ctx": {
-      "ctx_id": 2444968022783185398,
+      "ctx_id": 1634317776502591235,
       "p_ctx": {
-        "ctx_id": -9142258295977818439,
+        "ctx_id": -7575777599751406395,
         "p_ctx": null,
         "name": "video",
         "iteration": 1,
@@ -22,12 +22,12 @@
   },
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
+    "tstamp": "2025-04-10T12:58:15",
     "filename": "easyframe_ocr.py",
     "ctx": {
-      "ctx_id": -5807057091844108171,
+      "ctx_id": 853049441370018264,
       "p_ctx": {
-        "ctx_id": -9142258295977818439,
+        "ctx_id": -7575777599751406395,
         "p_ctx": null,
         "name": "video",
         "iteration": 1,
@@ -43,12 +43,12 @@
   },
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
+    "tstamp": "2025-04-10T12:58:15",
     "filename": "easyframe_ocr.py",
     "ctx": {
-      "ctx_id": 1923398010521897133,
+      "ctx_id": 3172165858131405969,
       "p_ctx": {
-        "ctx_id": -9142258295977818439,
+        "ctx_id": -7575777599751406395,
         "p_ctx": null,
         "name": "video",
         "iteration": 1,
@@ -64,12 +64,12 @@
   },
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
+    "tstamp": "2025-04-10T12:58:15",
     "filename": "easyframe_ocr.py",
     "ctx": {
-      "ctx_id": -2482772966824473772,
+      "ctx_id": -5487856364190442640,
       "p_ctx": {
-        "ctx_id": -9142258295977818439,
+        "ctx_id": -7575777599751406395,
         "p_ctx": null,
         "name": "video",
         "iteration": 1,
@@ -85,12 +85,12 @@
   },
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
+    "tstamp": "2025-04-10T12:58:15",
     "filename": "easyframe_ocr.py",
     "ctx": {
-      "ctx_id": -4979697617102356836,
+      "ctx_id": -1547185979714682494,
       "p_ctx": {
-        "ctx_id": -9142258295977818439,
+        "ctx_id": -7575777599751406395,
         "p_ctx": null,
         "name": "video",
         "iteration": 1,
@@ -100,239 +100,8 @@
       "iteration": 5,
       "value": "0000004905.jpg"
     },
-    "name": "text",
-    "value": "",
-    "type": 1
-  },
-  {
-    "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": -728515633334501981,
-      "p_ctx": {
-        "ctx_id": -9142258295977818439,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 6,
-      "value": "0000009945.jpg"
-    },
-    "name": "text",
-    "value": "",
-    "type": 1
-  },
-  {
-    "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": -8595752283724841270,
-      "p_ctx": {
-        "ctx_id": -9142258295977818439,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 7,
-      "value": "0000006525.jpg"
-    },
-    "name": "text",
-    "value": "",
-    "type": 1
-  },
-  {
-    "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": 3640635969095892975,
-      "p_ctx": {
-        "ctx_id": -9142258295977818439,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 8,
-      "value": "0000002025.jpg"
-    },
-    "name": "text",
-    "value": "",
-    "type": 1
-  },
-  {
-    "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": -2834106165836366702,
-      "p_ctx": {
-        "ctx_id": -9142258295977818439,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 9,
-      "value": "0000002970.jpg"
-    },
-    "name": "text",
-    "value": "",
-    "type": 1
-  },
-  {
-    "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": -9143680715068710118,
-      "p_ctx": {
-        "ctx_id": -9142258295977818439,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 10,
-      "value": "0000003105.jpg"
-    },
-    "name": "text",
-    "value": "",
-    "type": 1
-  },
-  {
-    "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": 4050808492355259053,
-      "p_ctx": {
-        "ctx_id": -9142258295977818439,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 11,
-      "value": "0000001935.jpg"
-    },
-    "name": "text",
-    "value": "",
-    "type": 1
-  },
-  {
-    "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": -3669932038582685320,
-      "p_ctx": {
-        "ctx_id": -9142258295977818439,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 12,
-      "value": "0000004680.jpg"
-    },
-    "name": "text",
-    "value": "",
-    "type": 1
-  },
-  {
-    "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": -4622786904871650195,
-      "p_ctx": {
-        "ctx_id": -9142258295977818439,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 13,
-      "value": "0000008910.jpg"
-    },
-    "name": "text",
-    "value": "",
-    "type": 1
-  },
-  {
-    "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": 2057908935095035456,
-      "p_ctx": {
-        "ctx_id": -9142258295977818439,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 14,
-      "value": "0000011925.jpg"
-    },
-    "name": "text",
-    "value": "",
-    "type": 1
-  },
-  {
-    "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": -6563059357954499238,
-      "p_ctx": {
-        "ctx_id": -9142258295977818439,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 15,
-      "value": "0000011070.jpg"
-    },
-    "name": "text",
-    "value": "",
-    "type": 1
-  },
-  {
-    "projid": "segmentation",
-    "tstamp": "2025-04-10T12:56:59",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": 7806911339112602173,
-      "p_ctx": {
-        "ctx_id": -9142258295977818439,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 16,
-      "value": "0000004455.jpg"
-    },
     "name": "delta::suffix",
-    "value": 47.89016995798738,
+    "value": 17.735941625011037,
     "type": 3
   }
 ]
