@@ -34,14 +34,21 @@ if __name__ == "__main__":
             img_path = os.path.join(frames, frame)
 
             easy_doc = model.readtext(img_path)
+            print("stop")
             
             result = ""
-            for (bbox, text, prob) in result:
-                result += text
+            for (bbox, text, prob) in easy_doc:
+                result += str(text)
             flor.log("text", result)
 
     print("Frame-by-frame OCR Done!")
 
+# import easyocr
+# reader = easyocr.Reader(['en']) # this needs to run only once to load the model into memory
+# result = reader.readtext('/Users/erickduarte/Downloads/IMG_4609.jpg')
+
+# for (bbox, text, prob) in result:
+#     print(f'Text: {text}')
 
 
 
