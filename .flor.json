@@ -1,7 +1,7 @@
 [
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-10T12:55:04",
+    "tstamp": "2025-04-10T12:55:51",
     "filename": "frameextraction.py",
     "ctx": null,
     "name": "out_path",
@@ -10,17 +10,20 @@
   },
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-10T12:55:04",
+    "tstamp": "2025-04-10T12:55:51",
     "filename": "frameextraction.py",
-    "ctx": {
-      "ctx_id": -6126806932603825278,
-      "p_ctx": null,
-      "name": "video",
-      "iteration": 2,
-      "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-    },
+    "ctx": null,
+    "name": "delta::loop",
+    "value": 65.86541049998777,
+    "type": 3
+  },
+  {
+    "projid": "segmentation",
+    "tstamp": "2025-04-10T12:55:51",
+    "filename": "frameextraction.py",
+    "ctx": null,
     "name": "delta::suffix",
-    "value": 16.965197124998667,
+    "value": 66.26388825000322,
     "type": 3
   }
 ]

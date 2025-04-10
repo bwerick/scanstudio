@@ -19,7 +19,7 @@ parse_OCR: frameextraction
 	python frame_ocr.py
 
 easy_OCR: frameextraction
-	python easy_ocr.py
+	python easyframe_ocr.py
 
 clean:
 	rm -rf test_frames
