@@ -1,107 +1,29 @@
 [
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-10T12:58:15",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": 1634317776502591235,
-      "p_ctx": {
-        "ctx_id": -7575777599751406395,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 1,
-      "value": "0000004050.jpg"
-    },
-    "name": "text",
-    "value": "",
+    "tstamp": "2025-04-13T19:26:34",
+    "filename": "frameextraction.py",
+    "ctx": null,
+    "name": "out_path",
+    "value": "test_frames",
     "type": 1
   },
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-10T12:58:15",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": 853049441370018264,
-      "p_ctx": {
-        "ctx_id": -7575777599751406395,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 2,
-      "value": "0000011475.jpg"
-    },
-    "name": "text",
-    "value": "",
-    "type": 1
+    "tstamp": "2025-04-13T19:26:34",
+    "filename": "frameextraction.py",
+    "ctx": null,
+    "name": "delta::loop",
+    "value": 152.3935677920017,
+    "type": 3
   },
   {
     "projid": "segmentation",
-    "tstamp": "2025-04-10T12:58:15",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": 3172165858131405969,
-      "p_ctx": {
-        "ctx_id": -7575777599751406395,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 3,
-      "value": "0000005400.jpg"
-    },
-    "name": "text",
-    "value": "",
-    "type": 1
-  },
-  {
-    "projid": "segmentation",
-    "tstamp": "2025-04-10T12:58:15",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": -5487856364190442640,
-      "p_ctx": {
-        "ctx_id": -7575777599751406395,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 4,
-      "value": "0000008865.jpg"
-    },
-    "name": "text",
-    "value": "",
-    "type": 1
-  },
-  {
-    "projid": "segmentation",
-    "tstamp": "2025-04-10T12:58:15",
-    "filename": "easyframe_ocr.py",
-    "ctx": {
-      "ctx_id": -1547185979714682494,
-      "p_ctx": {
-        "ctx_id": -7575777599751406395,
-        "p_ctx": null,
-        "name": "video",
-        "iteration": 1,
-        "value": "The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov"
-      },
-      "name": "frame",
-      "iteration": 5,
-      "value": "0000004905.jpg"
-    },
+    "tstamp": "2025-04-13T19:26:34",
+    "filename": "frameextraction.py",
+    "ctx": null,
     "name": "delta::suffix",
-    "value": 17.735941625011037,
+    "value": 153.69676216600055,
     "type": 3
   }
 ]
