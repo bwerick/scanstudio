@@ -9,7 +9,7 @@
 install_opencv:
 	apt-get update && apt-get install -y python3-opencv
 
-install:
+install: 
 	pip install -r requirements.txt
 
 frameextraction:
