@@ -173,3 +173,6 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+page_flattened.png
+pagesegmenttest.png
+.vscode/

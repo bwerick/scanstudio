@@ -9,7 +9,7 @@
 install_opencv:
 	apt-get update && apt-get install -y python3-opencv
 
-install:
+install: 
 	pip install -r requirements.txt
 
 frameextraction:
@@ -17,6 +17,9 @@ frameextraction:
 
 parse_OCR: frameextraction
 	python frame_ocr.py
+
+easy_OCR: frameextraction
+	python easyframe_ocr.py
 
 clean:
 	rm -rf test_frames
