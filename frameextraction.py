@@ -163,16 +163,13 @@ def video_to_frames(video_path, frames_dir, overwrite=False, every=1, chunk_size
 
 if __name__ == "__main__":
 
+    video_path = flor.arg("video", os.path.join("Videos", "test.mp4"))
     frames_dir = flor.arg("out_path", "test_frames")
 
-    for v in flor.loop("video", os.listdir("Videos")):
-        if v.endswith((".mp4", ".avi", ".mov", ".mkv")):
-            video_path = os.path.join("Videos", v)
-            video_to_frames(
-                video_path=video_path,
-                frames_dir=frames_dir,
-                overwrite=False,
-                every=45,
-                chunk_size=1000,
-            )
-            
+    video_to_frames(
+        video_path=video_path,
+        frames_dir=frames_dir,
+        overwrite=False,
+        every=45,
+        chunk_size=1000,
+    )

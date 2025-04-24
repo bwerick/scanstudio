@@ -4,22 +4,26 @@
 # |__|  |_____|_____|__|__|__|  |_____|__|__|_|___|
 #         
 
-VIDEOS ?= $(wildcard Videos/*.mov)
+VIDEOS ?= $(wildcard Videos/*.mp4 Videos/*.mov)
 OUTPUT_DIR = test_frames
 
 # Extract the base names of videos: video1.mp4 → video1
 BASENAMES = $(notdir $(basename $(VIDEOS)))
 
 # Construct output dirs: test_frames/video1/, etc.
-FRAME_DIRS = $(addsuffix /, $(addprefix $(OUTPUT_DIR)/,$(BASENAMES)))
+FRAME_DIRS = $(addsuffix /,$(addprefix $(OUTPUT_DIR)/,$(BASENAMES)))
+
 
 .PHONY: all
 all: $(FRAME_DIRS)
 
-$(OUTPUT_DIR)/%/ : Videos/%.mov
+$(OUTPUT_DIR)/%/: Videos/%.mov
 	@echo "Extracting frames from $< to $@"
-	python frameextraction.py --kwargs out_path=$(OUTPUT_DIR)
+	python frameextraction.py --kwargs out_path=$(OUTPUT_DIR) video=$<
 
+$(OUTPUT_DIR)/%/: Videos/%.mp4
+	@echo "Extracting frames from $< to $@"
+	python frameextraction.py --kwargs out_path=$(OUTPUT_DIR) video=$<
 
 .PHONY: install
 install: 
@@ -40,3 +44,8 @@ easy_OCR: frameextraction
 
 clean:
 	rm -rf $(OUTPUT_DIR)
+
+debug:
+	@echo VIDEOS: $(VIDEOS)
+	@echo BASENAMES: $(BASENAMES)
+	@echo FRAME_DIRS: $(FRAME_DIRS)
