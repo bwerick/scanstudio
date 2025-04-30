@@ -13,9 +13,15 @@ BASENAMES = $(notdir $(basename $(VIDEOS)))
 # Construct output dirs: test_frames/video1/, etc.
 FRAME_DIRS = $(addsuffix /,$(addprefix $(OUTPUT_DIR)/,$(BASENAMES)))
 
+FRAME_IMAGES = $(wildcard $(OUTPUT_DIR)/*/*.jpg)
+MARKDOWNS = $(FRAME_IMAGES:.jpg=.md)
+
+# debug:
+# 	@echo $(MARKDOWNS)
+# 	@echo $(FRAME_DIRS)
 
 .PHONY: all
-all: $(FRAME_DIRS)
+all: frameextraction
 
 $(OUTPUT_DIR)/%/: Videos/%.mov
 	@echo "Extracting frames from $< to $@"
@@ -25,6 +31,12 @@ $(OUTPUT_DIR)/%/: Videos/%.mp4
 	@echo "Extracting frames from $< to $@"
 	python frameextraction.py --kwargs out_path=$(OUTPUT_DIR) video=$<
 
+%.md: %.jpg
+	@echo "Generating Markdown for $<"
+	convert $< -strip -interlace Plane -quality 100% intermediate.jpg
+	marker_single intermediate.jpg $@
+	@rm -f intermediate.jpg
+
 .PHONY: install
 install: 
 	pip install -r requirements.txt
@@ -33,8 +45,11 @@ install:
 install_opencv:
 	apt-get update && apt-get install -y python3-opencv
 
-frameextraction:
-	python frameextraction.py --kwargs out_path=$(OUTPUT_DIR)
+.PHONY: frameextraction
+frameextraction: $(FRAME_DIRS)
+
+.PHONY: generate_md
+generate_md: $(FRAME_DIRS) $(MARKDOWNS)
 
 parse_OCR: frameextraction
 	python frame_ocr.py
@@ -44,8 +59,3 @@ easy_OCR: frameextraction
 
 clean:
 	rm -rf $(OUTPUT_DIR)
-
-debug:
-	@echo VIDEOS: $(VIDEOS)
-	@echo BASENAMES: $(BASENAMES)
-	@echo FRAME_DIRS: $(FRAME_DIRS)
