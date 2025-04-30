@@ -52,6 +52,9 @@ def extract_frames(video_path, frames_dir, overwrite=False, start=-1, end=-1, ev
     video_dir, video_filename = os.path.split(
         video_path
     )  # get the video path and filename from the path
+    video_stem = os.path.splitext(video_filename)[
+        0
+    ]  # get the filename without extension
 
     assert os.path.exists(video_path)  # assert the video file exists
 
@@ -86,7 +89,7 @@ def extract_frames(video_path, frames_dir, overwrite=False, start=-1, end=-1, ev
         ):  # if this is a frame we want to write out based on the 'every' argument
             while_safety = 0  # reset the safety count
             save_path = os.path.join(
-                frames_dir, video_filename, "{:010d}.jpg".format(frame)
+                frames_dir, video_stem, "{:010d}.jpg".format(frame)
             )  # create the save path
             if (
                 not os.path.exists(save_path) or overwrite
@@ -118,11 +121,14 @@ def video_to_frames(video_path, frames_dir, overwrite=False, every=1, chunk_size
     video_dir, video_filename = os.path.split(
         video_path
     )  # get the video path and filename from the path
+    video_stem = os.path.splitext(video_filename)[
+        0
+    ]  # get the filename without extension
 
     # split filename and extension
     video_stemname, video_ext = os.path.splitext(video_filename)
     # make directory to save frames, its a sub dir in the frames_dir with the video name
-    os.makedirs(os.path.join(frames_dir, video_stemname), exist_ok=True)
+    os.makedirs(os.path.join(frames_dir, video_stem), exist_ok=True)
 
     capture = cv2.VideoCapture(video_path)  # load the video
     total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))  # get its total frame count
@@ -159,7 +165,7 @@ def video_to_frames(video_path, frames_dir, overwrite=False, every=1, chunk_size
             )  # print it's progress
 
     return os.path.join(
-        frames_dir, video_stemname
+        frames_dir, video_stem
     )  # when done return the directory containing the frames
 
 
