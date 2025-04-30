@@ -119,8 +119,10 @@ def video_to_frames(video_path, frames_dir, overwrite=False, every=1, chunk_size
         video_path
     )  # get the video path and filename from the path
 
+    # split filename and extension
+    video_stemname, video_ext = os.path.splitext(video_filename)
     # make directory to save frames, its a sub dir in the frames_dir with the video name
-    os.makedirs(os.path.join(frames_dir, video_filename), exist_ok=True)
+    os.makedirs(os.path.join(frames_dir, video_stemname), exist_ok=True)
 
     capture = cv2.VideoCapture(video_path)  # load the video
     total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))  # get its total frame count
@@ -157,7 +159,7 @@ def video_to_frames(video_path, frames_dir, overwrite=False, every=1, chunk_size
             )  # print it's progress
 
     return os.path.join(
-        frames_dir, video_filename
+        frames_dir, video_stemname
     )  # when done return the directory containing the frames
 
 
