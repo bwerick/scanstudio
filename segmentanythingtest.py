@@ -83,7 +83,7 @@ print(masknew.shape)
 page_segment = np.zeros_like(image)
 page_segment[masknew] = image[masknew]
 
-cv.imwrite("pagesegment.png", page_segment)
+cv.imwrite("pagesegmentnewest.png", page_segment)
 
 """ for i, (mask, score) in enumerate(zip(masks, scores)):
 #     plt.figure(figsize=(10,10))

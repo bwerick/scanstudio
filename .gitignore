@@ -176,3 +176,4 @@ cython_debug/
 page_flattened.png
 pagesegmenttest.png
 .vscode/
+segmented_pages/
