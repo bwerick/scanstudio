@@ -34,22 +34,14 @@ model = ocr_predictor(
     pretrained=flor.arg("pretrained", True),
 ).to(device)
 
+# Convert the image to a DocumentFile
+doctr_doc = DocumentFile.from_images(frame)
 
-video_stem = os.path.basename(os.path.dirname(os.path.splitext(frame)[0]))
-frame_jpg = os.path.basename(frame)
+# Perform OCR
+result = model(doctr_doc)
 
-with flor.iteration("video", value=video_stem):
-    with flor.iteration(
-        "frame", idx=int(os.path.splitext(frame_jpg)[0]), value=frame_jpg
-    ):
-        # Convert the image to a DocumentFile
-        doctr_doc = DocumentFile.from_images(frame)
+# Save the result to a text file
+with open(out_path, "w") as f:
+    f.write(result.render())
 
-        # Perform OCR
-        result = model(doctr_doc)
-
-        # Save the result to a text file
-        with open(out_path, "w") as f:
-            f.write(result.render())
-
-        flor.log("status", "success")
+flor.log("status", "success")

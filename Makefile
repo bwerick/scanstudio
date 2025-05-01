@@ -10,8 +10,12 @@ OUTPUT_DIR = test_frames
 # Extract the base names of videos: video1.mp4 → video1
 BASENAMES = $(notdir $(basename $(VIDEOS)))
 
+# debug:
+# 	@echo "FRAME_IMAGES: $(FRAME_IMAGES)"
+# 	@echo "FRAME_TEXTS: $(FRAME_TEXTS)"
+
 .PHONY: all
-all: $(FRAME_DIRS) $(FRAME_TEXTS)
+all: frameextraction doctr_ocr
 
 # Construct output dirs: test_frames/video1/, etc.
 FRAME_DIRS = $(addsuffix /,$(addprefix $(OUTPUT_DIR)/,$(BASENAMES)))
@@ -27,6 +31,7 @@ $(OUTPUT_DIR)/%/: Videos/%.mp4
 
 .PHONY: frameextraction
 frameextraction: $(FRAME_DIRS)
+%.jpg: $(FRAME_DIRS)
 
 # Marker-pdf extraction 
 MARKDOWNS = $(FRAME_IMAGES:.jpg=.md)
