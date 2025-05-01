@@ -10,10 +10,6 @@ OUTPUT_DIR = test_frames
 # Extract the base names of videos: video1.mp4 → video1
 BASENAMES = $(notdir $(basename $(VIDEOS)))
 
-# debug:
-# 	@echo "FRAME_IMAGES: $(FRAME_IMAGES)"
-# 	@echo "FRAME_TEXTS: $(FRAME_TEXTS)"
-
 .PHONY: all
 all: frameextraction doctr_ocr
 
@@ -45,18 +41,22 @@ MARKDOWNS = $(FRAME_IMAGES:.jpg=.md)
 generate_md: $(FRAME_DIRS) $(MARKDOWNS)
 
 # OCR with doctr
-FRAME_TEXTS = $(FRAME_IMAGES:.jpg=.txt)
-%.txt: %.jpg
-	@echo "Generating OCR text for $<"
-	python doctr_ocr.py --kwargs frame=$< out_path=$@
+DOCTR_TXTS = $(FRAME_IMAGES:.jpg=_doctr.txt)
+%_doctr.txt: %.jpg
+	@echo "Generating doctr OCR text for $<"
+	python ocr.py --kwargs frame=$< out_path=$@ ocr_mode=doctr
 
 .PHONY: doctr_ocr
-doctr_ocr: $(FRAME_TEXTS)
+doctr_ocr: $(DOCTR_TXTS)
 
 # OCR with easyOCR
-easy_OCR: frameextraction
-	python easyframe_ocr.py
+EASYOCR_TXTS = $(FRAME_IMAGES:.jpg=_easyocr.txt)
+%_easyocr.txt: %.jpg
+	@echo "Generating easyOCR text for $<"
+	python ocr.py --kwargs frame=$< out_path=$@ ocr_mode=easyocr
 
+.PHONY: easy_ocr
+easy_ocr: $(EASYOCR_TXTS)
 
 .PHONY: install
 install: 
