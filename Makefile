@@ -11,7 +11,7 @@ OUTPUT_DIR = test_frames
 BASENAMES = $(notdir $(basename $(VIDEOS)))
 
 .PHONY: all
-all: frameextraction doctr_ocr
+all: frameextraction doctr_ocr easy_ocr
 
 # Construct output dirs: test_frames/video1/, etc.
 FRAME_DIRS = $(addsuffix /,$(addprefix $(OUTPUT_DIR)/,$(BASENAMES)))
@@ -38,7 +38,7 @@ MARKDOWNS = $(FRAME_IMAGES:.jpg=.md)
 	@rm -f intermediate.jpg
 
 .PHONY: generate_md
-generate_md: $(FRAME_DIRS) $(MARKDOWNS)
+generate_md: $(MARKDOWNS)
 
 # OCR with doctr
 DOCTR_TXTS = $(FRAME_IMAGES:.jpg=_doctr.txt)

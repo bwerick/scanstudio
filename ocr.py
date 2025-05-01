@@ -15,9 +15,6 @@ import torch
 
 frame = flor.arg("frame", default="test_frames/video_1/00001.jpg")
 out_path = flor.arg("out_path", default="test_frames/video_1/00001_doctr.txt")
-assert (
-    os.path.splitext(frame)[0] == os.path.splitext(out_path)[0]
-), "Frame and out_path must match except for the extension"
 ocr_mode = flor.arg("ocr_mode", default="doctr")
 assert ocr_mode in ["easyocr", "doctr"], "ocr_mode must be either easyocr or doctr"
 
