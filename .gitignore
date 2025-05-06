@@ -181,3 +181,14 @@ page_flattened.png
 pagesegmenttest.png
 .vscode/
 segmented_pages/
+percenterror.py
+doctr.txt
+easyocr.txt
+original.txt
+simpledoctr.py
+singleframe.py
+docTR_OCR_output.json
+
+chatgpteasyocr.txt
+chatgptdoctr.txt
+compare_texts.py
