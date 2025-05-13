@@ -72,3 +72,8 @@ install_opencv:
 clean:
 	rm -rf $(OUTPUT_DIR)
 
+# create .venv
+.venv:
+	python3 -m venv .venv
+
+
