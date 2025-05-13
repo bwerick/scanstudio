@@ -65,7 +65,13 @@ install:
 
 .PHONY: install_opencv
 install_opencv:
-	apt-get update && apt-get install -y python3-opencv
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		echo "Installing OpenCV using Homebrew on macOS"; \
+		brew install opencv; \
+	else \
+		echo "Installing OpenCV using apt-get on Linux"; \
+		apt-get update && apt-get install -y python3-opencv; \
+	fi
 
 
 .PHONY: clean
