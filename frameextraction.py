@@ -178,6 +178,6 @@ if __name__ == "__main__":
         video_path=video_path,
         frames_dir=frames_dir,
         overwrite=False,
-        every=45,
-        chunk_size=1000,
+        every=flor.arg("every", 45),
+        chunk_size=flor.arg("chunk_size", 512),
     )
