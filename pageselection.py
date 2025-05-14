@@ -1,21 +1,18 @@
 import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
 import numpy as np
-from segment_anything import SamPredictor, sam_model_registry, SamAutomaticMaskGenerator
+from segment_anything import SamPredictor, sam_model_registry
 import cv2 as cv
-import pandas as pd 
 import os
-import torch
 
 # Load the images
-folder_path = '/Users/erickduarte/git/segmentation/test_frames/The Sun Also Rises Ernest Hemingway.mp4'
+folder_path = "/Users/erickduarte/git/segmentation/test_frames/The Sun Also Rises Ernest Hemingway.mp4"
 image_list = []
-#image_path = '/Users/erickduarte/git/segmentation/test_frames/The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov/0000008550.jpg'
-#img = mpimg.imread(image_path)
-#image = cv.cvtColor(cv.imread(image_path), cv.COLOR_BGR2RGB)
+# image_path = '/Users/erickduarte/git/segmentation/test_frames/The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov/0000008550.jpg'
+# img = mpimg.imread(image_path)
+# image = cv.cvtColor(cv.imread(image_path), cv.COLOR_BGR2RGB)
 
 for filename in os.listdir(folder_path):
-    if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
+    if filename.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".tiff")):
         img_path = os.path.join(folder_path, filename)
         img = cv.imread(img_path)
         if img is not None:
@@ -24,10 +21,9 @@ for filename in os.listdir(folder_path):
             print(f"Warning: could not read {filename}")
 
 print(f"Loaded {len(image_list)} images.")
-index = int(len(image_list)/2)
+index = int(len(image_list) / 2)
 img_path, img1 = image_list[index]
 img = cv.cvtColor(img1, cv.COLOR_BGR2RGB)
-
 
 
 print_instructions = True  # Set False after first use to skip repeat output
@@ -37,6 +33,7 @@ coords = []
 labels = []
 dots = []
 last_click = [None, None]
+
 
 # === Click to add points ===
 def onclick(event):
@@ -48,22 +45,23 @@ def onclick(event):
     if event.button == 1:
         coords.append((x, y))
         labels.append(1)
-        dot, = plt.plot(x, y, 'go')  # inclusive
+        (dot,) = plt.plot(x, y, "go")  # inclusive
         dots.append(dot)
         print(f"[INCLUSIVE] ({x}, {y})")
 
     elif event.button == 3:
         coords.append((x, y))
         labels.append(0)
-        dot, = plt.plot(x, y, 'ro')  # exclusive
+        (dot,) = plt.plot(x, y, "ro")  # exclusive
         dots.append(dot)
         print(f"[EXCLUSIVE] ({x}, {y})")
 
     plt.draw()
 
+
 # === Press 'd' to delete nearest point ===
 def onkey(event):
-    if event.key == 'd' and coords:
+    if event.key == "d" and coords:
         x, y = last_click
         if x is None or y is None:
             print("Click near a point first to select for deletion.")
@@ -77,6 +75,7 @@ def onkey(event):
         print(f"Removed ({removed}) with label {removed_label}")
         plt.draw()
 
+
 # === Run selection session ===
 def run_annotation(title, imgIn):
     global coords, labels, dots, last_click
@@ -89,8 +88,8 @@ def run_annotation(title, imgIn):
     fig, ax = plt.subplots()
     ax.imshow(img)
 
-    fig.canvas.mpl_connect('button_press_event', onclick)
-    fig.canvas.mpl_connect('key_press_event', onkey)
+    fig.canvas.mpl_connect("button_press_event", onclick)
+    fig.canvas.mpl_connect("key_press_event", onkey)
 
     if print_instructions:
         print(f"\n📝 {title}")
@@ -103,6 +102,7 @@ def run_annotation(title, imgIn):
     plt.show()
 
     return np.array(coords), np.array(labels)
+
 
 # === Run two annotation rounds ===
 coords_left, labels_left = run_annotation("Step 1: Select LEFT PAGE Points", img)
@@ -118,42 +118,53 @@ print("Coordinates:\n", coords_right)
 print("Labels:\n", labels_right)
 
 
-
-
-
-
-
 def show_points(coords, labels, ax, marker_size=375):
-    pos_points = coords[labels==1]
-    neg_points = coords[labels==0]
-    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
-    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)   
+    pos_points = coords[labels == 1]
+    neg_points = coords[labels == 0]
+    ax.scatter(
+        pos_points[:, 0],
+        pos_points[:, 1],
+        color="green",
+        marker="*",
+        s=marker_size,
+        edgecolor="white",
+        linewidth=1.25,
+    )
+    ax.scatter(
+        neg_points[:, 0],
+        neg_points[:, 1],
+        color="red",
+        marker="*",
+        s=marker_size,
+        edgecolor="white",
+        linewidth=1.25,
+    )
+
 
 def show_mask(mask, ax, random_color=False):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
     else:
-        color = np.array([30/255, 144/255, 255/255, 0.6])
+        color = np.array([30 / 255, 144 / 255, 255 / 255, 0.6])
     h, w = mask.shape[-2:]
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
     ax.imshow(mask_image)
 
 
-sam = sam_model_registry["vit_h"](checkpoint="/Users/erickduarte/git/segment-anything/sam_vit_h_4b8939.pth")
+sam = sam_model_registry["vit_h"](
+    checkpoint="/Users/erickduarte/git/segment-anything/sam_vit_h_4b8939.pth"
+)
 predictor = SamPredictor(sam)
 
 
-
-
-#mask_generator = SamAutomaticMaskGenerator(sam, points_per_batch=16)
-#sam.to(device="mps")
-
+# mask_generator = SamAutomaticMaskGenerator(sam, points_per_batch=16)
+# sam.to(device="mps")
 
 
 # plt.imshow(image)
 # show_points(input_point, input_label, plt.gca())
 # plt.axis('on')
-# plt.show()  
+# plt.show()
 # plt.waitforbuttonpress()
 
 # input_point = coords_left
@@ -167,7 +178,7 @@ predictor = SamPredictor(sam)
 # print(masks.shape)
 
 
-# h, w = masks[0].shape[:2] 
+# h, w = masks[0].shape[:2]
 # mask = masks[0].reshape(h, w)
 # if len(image.shape) == 3:
 #     masknew = np.stack([mask, mask, mask], axis=-1)
@@ -193,7 +204,7 @@ predictor = SamPredictor(sam)
 # print(masks.shape)
 
 
-# h, w = masks[0].shape[:2] 
+# h, w = masks[0].shape[:2]
 # mask = masks[0].reshape(h, w)
 # if len(image.shape) == 3:
 #     masknew = np.stack([mask, mask, mask], axis=-1)
@@ -219,8 +230,9 @@ predictor = SamPredictor(sam)
     plt.waitforbuttonpress() """
 
 # === Output folder ===
-output_folder = 'segmented_pages'
+output_folder = "segmented_pages"
 os.makedirs(output_folder, exist_ok=True)
+
 
 def segment_page(image, point_coords, point_labels):
     predictor.set_image(image)
@@ -240,6 +252,7 @@ def segment_page(image, point_coords, point_labels):
     segmented[mask_rgb.astype(bool)] = image[mask_rgb.astype(bool)]
     return segmented
 
+
 # === Main loop: process each image ===
 for i, (img_path, image) in enumerate(image_list):
     base_name = os.path.splitext(os.path.basename(img_path))[0]
@@ -253,6 +266,8 @@ for i, (img_path, image) in enumerate(image_list):
 
     # Segment right page
     right_segment = segment_page(image, coords_right, labels_right)
-    cv.imwrite(os.path.join(output_folder, f"frame_{frame_id}_right.png"), right_segment)
+    cv.imwrite(
+        os.path.join(output_folder, f"frame_{frame_id}_right.png"), right_segment
+    )
 
     print(f"Saved: frame_{frame_id}_left.png and frame_{frame_id}_right.png")
