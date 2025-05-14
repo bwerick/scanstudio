@@ -1,116 +1,66 @@
-from segment_anything import SamPredictor, sam_model_registry, SamAutomaticMaskGenerator
+import os
 import cv2
 import numpy as np
-import pandas as pd
-import os
-from matplotlib import pyplot as plt
+from segment_anything import SamPredictor, sam_model_registry
 import torch
+import platform
+import flor
 
+# --- Paths ---
+image_dir = flor.arg("image_dir", default=os.path.join("test_frames", "WebOfBelief"))
+output_dir = os.path.join(image_dir, "segmented")
+checkpoint_path = os.path.join(os.path.pardir, "sam_vit_h_4b8939.pth")
 
-imagepath = "/Users/erickduarte/git/segmentation/test_frames/The Sun Also Rises Ernest Hemingway.mp4/0000000495.jpg"
-image = cv2.cvtColor(cv2.imread(imagepath), cv2.COLOR_BGR2RGB)
-
-
-y, x = image.shape[:2]
-print(image.shape)
-x_center = x // 2
-y_center = y // 2
-
-input_point = np.array(
-    [
-        [x_center * 0.7, y_center * 0.5],
-        [x_center * 0.5, y_center * 1.5],
-        [x_center * 1.3, y_center * 0.5],
-        [x_center * 1.5, y_center * 1.5],
-    ]
-)
-input_label = np.array([1, 1, 0, 0])
-
-# input_point = np.array([[1200, 1250]])
-# input_label = np.array([1])
-
-
-def show_points(coords, labels, ax, marker_size=375):
-    pos_points = coords[labels == 1]
-    neg_points = coords[labels == 0]
-    ax.scatter(
-        pos_points[:, 0],
-        pos_points[:, 1],
-        color="green",
-        marker="*",
-        s=marker_size,
-        edgecolor="white",
-        linewidth=1.25,
-    )
-    ax.scatter(
-        neg_points[:, 0],
-        neg_points[:, 1],
-        color="red",
-        marker="*",
-        s=marker_size,
-        edgecolor="white",
-        linewidth=1.25,
-    )
-
-
-def show_mask(mask, ax, random_color=False):
-    if random_color:
-        color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
-    else:
-        color = np.array([30 / 255, 144 / 255, 255 / 255, 0.6])
-    h, w = mask.shape[-2:]
-    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-    ax.imshow(mask_image)
-
-
-sam = sam_model_registry["vit_h"](
-    checkpoint="/Users/erickduarte/git/segment-anything/sam_vit_h_4b8939.pth"
-)
+sam = sam_model_registry["vit_h"](checkpoint=checkpoint_path)
 predictor = SamPredictor(sam)
-predictor.set_image(image)
 
-
-# mask_generator = SamAutomaticMaskGenerator(sam, points_per_batch=16)
-# sam.to(device="mps")
-
-
-# plt.imshow(image)
-# show_points(input_point, input_label, plt.gca())
-# plt.axis('on')
-# plt.show()
-# plt.waitforbuttonpress()
-
-
-masks, scores, logits = predictor.predict(
-    point_coords=input_point,
-    point_labels=input_label,
-    multimask_output=False,
-)
-print(masks.shape)
-
-
-# color = np.array([255/255, 255/255, 255/255, 1])
-h, w = masks[0].shape[:2]
-mask = masks[0].reshape(h, w)
-if len(image.shape) == 3:
-    masknew = np.stack([mask, mask, mask], axis=-1)
-
+# Optional: move to GPU if available
+if platform.system() == "Darwin":
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
 else:
-    masknew = np.stack(mask, axis=-1)
-print(masknew.shape)
-# mask_image = (mask * 255).astype(np.uint8)  # Convert to uint8 format
-# cv2.imwrite('mask.png', mask_image)
-page_segment = np.zeros_like(image)
-page_segment[masknew] = image[masknew]
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+sam.to(flor.arg("device", device))
 
-cv2.imwrite("pagesegmentnewest.png", page_segment)
 
-""" for i, (mask, score) in enumerate(zip(masks, scores)):
-#     plt.figure(figsize=(10,10))
-    print(mask, score)
-    plt.imshow(image)
-    show_mask(mask, plt.gca())
-    show_points(input_point, input_label, plt.gca())
-    plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
-    plt.show()
-    plt.waitforbuttonpress() """
+# --- Define your fixed prompts ---
+def get_prompt(image):
+    y, x = image.shape[:2]
+    x_center = x // 2
+    y_center = y // 2
+    input_point = np.array(
+        [
+            [x_center * 0.7, y_center * 0.5],
+            [x_center * 0.5, y_center * 1.5],
+            [x_center * 1.3, y_center * 0.5],
+            [x_center * 1.5, y_center * 1.5],
+        ]
+    )
+    input_label = np.array([1, 1, 0, 0])
+    return input_point, input_label
+
+
+# --- Processing loop ---
+os.makedirs(output_dir, exist_ok=True)
+
+for filename in flor.loop("frame", os.listdir(image_dir)):
+    if filename.lower().endswith(".jpg"):
+        img_path = os.path.join(image_dir, filename)
+        image = cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB)
+        # image = image.astype(np.float32)
+
+        predictor.set_image(image)
+        input_point, input_label = get_prompt(image)
+
+        masks, scores, logits = predictor.predict(
+            point_coords=input_point, point_labels=input_label, multimask_output=False
+        )
+
+        mask = masks[0]
+        h, w = mask.shape
+        mask_3ch = np.stack([mask] * 3, axis=-1)
+
+        segmented = np.zeros_like(image)
+        segmented[mask_3ch] = image[mask_3ch]
+
+        out_path = os.path.join(output_dir, filename)
+        cv2.imwrite(out_path, cv2.cvtColor(segmented, cv2.COLOR_RGB2BGR))

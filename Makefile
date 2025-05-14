@@ -13,6 +13,12 @@ BASENAMES = $(notdir $(basename $(VIDEOS)))
 .PHONY: all
 all: frameextraction doctr_ocr easy_ocr
 
+
+
+../sam_vit_h_4b8939.pth: 
+	@echo "Downloading SAM model weights"
+	curl -L -o ../sam_vit_h_4b8939.pth https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
+
 # Construct output dirs: test_frames/video1/, etc.
 FRAME_DIRS = $(addsuffix /,$(addprefix $(OUTPUT_DIR)/,$(BASENAMES)))
 FRAME_IMAGES = $(wildcard $(OUTPUT_DIR)/*/*.jpg)
