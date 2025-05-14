@@ -29,20 +29,6 @@ img_path, img1 = image_list[index]
 img = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
 
 
-df = flor.dataframe("folder_path")
-if not df.empty:
-    df = df[df["filename"] == "pageselection.py"]
-# if this is the first time running the script on this folder, check empty, if so, set to True
-if df.empty:
-    print_instructions = True
-else:
-    print_instructions = False
-    # check if the folder has been processed before
-    if df["folder_path"].ilo == folder_path:
-        print_instructions = False
-    else:
-        print_instructions = True
-
 # === GLOBALS for shared state ===
 coords = []
 labels = []
@@ -106,12 +92,11 @@ def run_annotation(title, imgIn):
     fig.canvas.mpl_connect("button_press_event", onclick)
     fig.canvas.mpl_connect("key_press_event", onkey)
 
-    if print_instructions:
-        print(f"\n📝 {title}")
-        print(" - Left-click: INCLUSIVE (green)")
-        print(" - Right-click: EXCLUSIVE (red)")
-        print(" - Press 'd': Delete nearest clicked point")
-        print(" - Close the window to finish selection\n")
+    print(f"\n📝 {title}")
+    print(" - Left-click: INCLUSIVE (green)")
+    print(" - Right-click: EXCLUSIVE (red)")
+    print(" - Press 'd': Delete nearest clicked point")
+    print(" - Close the window to finish selection\n")
 
     plt.title(title)
     plt.show()
@@ -124,13 +109,13 @@ coords_left, labels_left = run_annotation("Step 1: Select LEFT PAGE Points", img
 coords_right, labels_right = run_annotation("Step 2: Select RIGHT PAGE Points", img)
 
 # === Combine or keep separate ===
-print("\n=== LEFT PAGE ===")
-print("Coordinates:\n", coords_left)
-print("Labels:\n", labels_left)
+# print("\n=== LEFT PAGE ===")
+# print("Coordinates:\n", coords_left)
+# print("Labels:\n", labels_left)
 
-print("\n=== RIGHT PAGE ===")
-print("Coordinates:\n", coords_right)
-print("Labels:\n", labels_right)
+# print("\n=== RIGHT PAGE ===")
+# print("Coordinates:\n", coords_right)
+# print("Labels:\n", labels_right)
 
 
 def show_points(coords, labels, ax, marker_size=375):
@@ -181,10 +166,13 @@ predictor = SamPredictor(sam)
 
 
 # === Output folder ===
-output_folder = "segmented_pages"
+output_folder = os.path.join(
+    flor.arg("output_folder", "segmented_pages"), os.path.basename(folder_path)
+)
 os.makedirs(output_folder, exist_ok=True)
 
 
+# === Segment the pages ===
 def segment_page(image, point_coords, point_labels):
     predictor.set_image(image)
     masks, scores, logits = predictor.predict(
@@ -205,20 +193,16 @@ def segment_page(image, point_coords, point_labels):
 
 
 # === Main loop: process each image ===
-for i, (img_path, image) in enumerate(image_list):
+for i, (img_path, image) in flor.loop("frame", enumerate(image_list)):
     base_name = os.path.splitext(os.path.basename(img_path))[0]
-    frame_id = f"{i:03d}"
+    frame_id = base_name
 
-    print(f"Processing frame {frame_id}: {img_path}")
+    print(f"Processing frame: {frame_id}")
 
     # Segment left page
     left_segment = segment_page(image, coords_left, labels_left)
-    cv2.imwrite(os.path.join(output_folder, f"frame_{frame_id}_left.png"), left_segment)
+    cv2.imwrite(os.path.join(output_folder, f"{frame_id}_left.png"), left_segment)
 
     # Segment right page
     right_segment = segment_page(image, coords_right, labels_right)
-    cv2.imwrite(
-        os.path.join(output_folder, f"frame_{frame_id}_right.png"), right_segment
-    )
-
-    print(f"Saved: frame_{frame_id}_left.png and frame_{frame_id}_right.png")
+    cv2.imwrite(os.path.join(output_folder, f"{frame_id}_right.png"), right_segment)
