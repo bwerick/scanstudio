@@ -5,6 +5,16 @@ import os
 import sys
 import flor
 
+"""
+This script extracts frames from a video using OpenCV and saves them to a specified directory.
+It uses multiprocessing to speed up the process by splitting the video into chunks and processing each chunk in parallel.
+The script is designed to be run from the command line and takes the following arguments:
+    - video: path to the video file
+    - out_path: directory to save the extracted frames
+    - every: extract every nth frame (default is 1)
+    - chunk_size: number of frames to process in each chunk (default is 512)
+"""
+
 
 def print_progress(iteration, total, prefix="", suffix="", decimals=3, bar_length=100):
     """

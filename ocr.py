@@ -1,3 +1,12 @@
+"""
+This script performs OCR on a given image using either EasyOCR or Doctr.
+It takes the following arguments:
+    - frame: path to the image file
+    - out_path: path to save the OCR result
+    - ocr_mode: OCR engine to use (easyocr or doctr)
+    - device: device to run the OCR on (cpu, cuda, or mps)
+"""
+
 import os
 from PIL import Image
 import platform
@@ -12,6 +21,7 @@ import easyocr
 from doctr.io import DocumentFile
 from doctr.models import ocr_predictor
 import torch
+
 
 frame = flor.arg("frame", default="test_frames/video_1/00001.jpg")
 out_path = flor.arg("out_path", default="test_frames/video_1/00001_doctr.txt")
