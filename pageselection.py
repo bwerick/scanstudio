@@ -1,32 +1,47 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from segment_anything import SamPredictor, sam_model_registry
-import cv2 as cv
+import cv2
 import os
+import flor
+import platform
+import torch
 
 # Load the images
-folder_path = "/Users/erickduarte/git/segmentation/test_frames/The Sun Also Rises Ernest Hemingway.mp4"
+folder_path = flor.arg("folder_path", os.path.join("test_frames", "WebOfBelief"))
 image_list = []
-# image_path = '/Users/erickduarte/git/segmentation/test_frames/The Slow Regard of Silent Things - Patrick Rothfuss (GoPro).mov/0000008550.jpg'
-# img = mpimg.imread(image_path)
-# image = cv.cvtColor(cv.imread(image_path), cv.COLOR_BGR2RGB)
 
+"""Load images from the specified folder and store them in a list."""
 for filename in os.listdir(folder_path):
     if filename.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".tiff")):
         img_path = os.path.join(folder_path, filename)
-        img = cv.imread(img_path)
+        img = cv2.imread(img_path)
         if img is not None:
             image_list.append((img_path, img))
         else:
             print(f"Warning: could not read {filename}")
 
 print(f"Loaded {len(image_list)} images.")
+
+# Select the middle image for annotation
 index = int(len(image_list) / 2)
 img_path, img1 = image_list[index]
-img = cv.cvtColor(img1, cv.COLOR_BGR2RGB)
+img = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
 
 
-print_instructions = True  # Set False after first use to skip repeat output
+df = flor.dataframe("folder_path")
+if not df.empty:
+    df = df[df["filename"] == "pageselection.py"]
+# if this is the first time running the script on this folder, check empty, if so, set to True
+if df.empty:
+    print_instructions = True
+else:
+    print_instructions = False
+    # check if the folder has been processed before
+    if df["folder_path"].ilo == folder_path:
+        print_instructions = False
+    else:
+        print_instructions = True
 
 # === GLOBALS for shared state ===
 coords = []
@@ -152,82 +167,18 @@ def show_mask(mask, ax, random_color=False):
 
 
 sam = sam_model_registry["vit_h"](
-    checkpoint="/Users/erickduarte/git/segment-anything/sam_vit_h_4b8939.pth"
+    checkpoint=flor.arg(
+        "sam_checkpoint", os.path.join(os.path.pardir, "sam_vit_h_4b8939.pth")
+    )
 )
+if platform.system() == "Darwin":
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+else:
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+device = flor.arg("device", device)
+sam = sam.to(device)
 predictor = SamPredictor(sam)
 
-
-# mask_generator = SamAutomaticMaskGenerator(sam, points_per_batch=16)
-# sam.to(device="mps")
-
-
-# plt.imshow(image)
-# show_points(input_point, input_label, plt.gca())
-# plt.axis('on')
-# plt.show()
-# plt.waitforbuttonpress()
-
-# input_point = coords_left
-# input_label = labels_left
-
-# masks, scores, logits = predictor.predict(
-#     point_coords=input_point,
-#     point_labels=input_label,
-#     multimask_output=False,
-# )
-# print(masks.shape)
-
-
-# h, w = masks[0].shape[:2]
-# mask = masks[0].reshape(h, w)
-# if len(image.shape) == 3:
-#     masknew = np.stack([mask, mask, mask], axis=-1)
-
-# else:
-#     masknew = np.stack(mask, axis=-1)
-# print(masknew.shape)
-# # mask_image = (mask * 255).astype(np.uint8)  # Convert to uint8 format
-# # cv2.imwrite('mask.png', mask_image)
-# page_segment = np.zeros_like(image)
-# page_segment[masknew] = image[masknew]
-
-# cv.imwrite("pagesegmentleft.png", page_segment)
-
-# input_point = coords_right
-# input_label = labels_right
-
-# masks, scores, logits = predictor.predict(
-#     point_coords=input_point,
-#     point_labels=input_label,
-#     multimask_output=False,
-# )
-# print(masks.shape)
-
-
-# h, w = masks[0].shape[:2]
-# mask = masks[0].reshape(h, w)
-# if len(image.shape) == 3:
-#     masknew = np.stack([mask, mask, mask], axis=-1)
-
-# else:
-#     masknew = np.stack(mask, axis=-1)
-# print(masknew.shape)
-# # mask_image = (mask * 255).astype(np.uint8)  # Convert to uint8 format
-# # cv2.imwrite('mask.png', mask_image)
-# page_segment = np.zeros_like(image)
-# page_segment[masknew] = image[masknew]
-
-# cv.imwrite("pagesegmentright.png", page_segment)
-
-""" for i, (mask, score) in enumerate(zip(masks, scores)):
-#     plt.figure(figsize=(10,10))
-    print(mask, score)
-    plt.imshow(image)
-    show_mask(mask, plt.gca())
-    show_points(input_point, input_label, plt.gca())
-    plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
-    plt.show()
-    plt.waitforbuttonpress() """
 
 # === Output folder ===
 output_folder = "segmented_pages"
@@ -262,11 +213,11 @@ for i, (img_path, image) in enumerate(image_list):
 
     # Segment left page
     left_segment = segment_page(image, coords_left, labels_left)
-    cv.imwrite(os.path.join(output_folder, f"frame_{frame_id}_left.png"), left_segment)
+    cv2.imwrite(os.path.join(output_folder, f"frame_{frame_id}_left.png"), left_segment)
 
     # Segment right page
     right_segment = segment_page(image, coords_right, labels_right)
-    cv.imwrite(
+    cv2.imwrite(
         os.path.join(output_folder, f"frame_{frame_id}_right.png"), right_segment
     )
 
