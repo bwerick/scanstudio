@@ -26,14 +26,18 @@ def frames_generator(image_paths, start=0, stop=None, step=1):
 
 
 def track_pages_from_reference(
-    frames, ref_index, left_anchor_px, right_anchor_px, box_size_ratio=(0.3, 0.55)
+    frames,
+    median_frame_rgb,
+    left_anchor_px,
+    right_anchor_px,
+    box_size_ratio=(0.3, 0.55),
 ):
     """Track and crop pages in all frames using optical flow from the reference frame."""
-    w = frames[ref_index].shape[1]
-    h = frames[ref_index].shape[0]
+    w = median_frame_rgb.shape[1]
+    h = median_frame_rgb.shape[0]
     box_w, box_h = int(box_size_ratio[0] * w), int(box_size_ratio[1] * h)
 
-    gray_ref = cv2.cvtColor(frames[ref_index], cv2.COLOR_BGR2GRAY)
+    gray_ref = cv2.cvtColor(median_frame_rgb, cv2.COLOR_BGR2GRAY)
     left_pt = np.array([left_anchor_px], dtype=np.float32)
     right_pt = np.array([right_anchor_px], dtype=np.float32)
 
@@ -72,7 +76,7 @@ plt.figure(figsize=(10, 6))
 plt.imshow(median_frame_rgb)
 plt.title(f"Select anchor points on median frame: {image_paths[median_idx]}")
 plt.axis("off")
-plt.show()
+# plt.show()
 
 # Prompt user to select two anchor points (left and right) on the displayed image
 print(
@@ -92,7 +96,7 @@ right_anchor = (int(right_anchor[0]), int(right_anchor[1]))
 # Call the tracking function correctly
 left_crops, right_crops = track_pages_from_reference(
     frames_generator(image_paths),  # all frames
-    ref_index=median_idx,  # index of reference frame
+    median_frame_rgb=median_frame_rgb,  # index of reference frame
     left_anchor_px=left_anchor,
     right_anchor_px=right_anchor,
     box_size_ratio=(0.3, 0.55),  # default box width/height ratios
