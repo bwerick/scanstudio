@@ -22,7 +22,7 @@ def frames_generator(image_paths, start=0, stop=None, step=1):
     if stop is None:
         stop = len(image_paths)
     for idx in range(start, stop, step):
-        yield cv2.imread(str(image_paths[idx]))
+        yield cv2.imread(os.path.join(input_dir, str(image_paths[idx])))
 
 
 def track_pages_from_reference(
@@ -64,7 +64,7 @@ image_paths = load_image_sequence()
 median_idx = len(image_paths) // 2
 
 # We'll pause here for user input
-median_frame = cv2.imread(str(image_paths[median_idx]))
+median_frame = cv2.imread(os.path.join(input_dir, str(image_paths[median_idx])))
 median_frame_rgb = cv2.cvtColor(median_frame, cv2.COLOR_BGR2RGB)
 
 # Display the median frame for bounding box entry
