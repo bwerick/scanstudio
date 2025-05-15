@@ -30,7 +30,7 @@ def track_pages_from_reference(
     median_frame_rgb,
     left_anchor_px,
     right_anchor_px,
-    box_size_ratio=(0.3, 0.55),
+    box_size_ratio,
 ):
     """Track and crop pages in all frames using optical flow from the reference frame."""
     w = median_frame_rgb.shape[1]
@@ -43,7 +43,7 @@ def track_pages_from_reference(
 
     left_crops, right_crops = [], []
 
-    for f in frames:
+    for f in flor.loop("frame", frames):
         gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
         tracked_pts, status, _ = cv2.calcOpticalFlowPyrLK(
             gray_ref, gray, np.vstack([left_pt, right_pt]), None
@@ -85,21 +85,29 @@ print(
 anchors = plt.ginput(2, timeout=0)
 if len(anchors) != 2:
     raise ValueError("You must select exactly two anchor points.")
+plt.close()
 left_anchor = anchors[0]
 right_anchor = anchors[1]
 left_anchor = (int(left_anchor[0]), int(left_anchor[1]))
 right_anchor = (int(right_anchor[0]), int(right_anchor[1]))
 
 
-# Fixing the function call to match defined signature
+# Infer bbox size from the selected points
+box_size_ratio = (
+    abs(left_anchor[0] - right_anchor[0]) / median_frame.shape[1],  # width
+    0.55,
+)  # height
+
+
+# right_anchor = (right_anchor[0], left_anchor[1])  # Align y-coordinates for right anchor
 
 # Call the tracking function correctly
 left_crops, right_crops = track_pages_from_reference(
     frames_generator(image_paths),  # all frames
-    median_frame_rgb=median_frame_rgb,  # index of reference frame
+    median_frame_rgb=median_frame_rgb,
     left_anchor_px=left_anchor,
     right_anchor_px=right_anchor,
-    box_size_ratio=(0.3, 0.55),  # default box width/height ratios
+    box_size_ratio=box_size_ratio,
 )
 
 # Save cropped pages to output folders
