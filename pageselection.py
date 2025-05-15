@@ -197,6 +197,12 @@ for i, (img_path, image) in flor.loop("frame", enumerate(image_list)):
     base_name = os.path.splitext(os.path.basename(img_path))[0]
     frame_id = base_name
 
+    if os.path.exists(
+        os.path.join(output_folder, f"{frame_id}_left.png")
+    ) and os.path.exists(os.path.join(output_folder, f"{frame_id}_right.png")):
+        print(f"Skipping {frame_id} (already processed)")
+        continue
+
     print(f"Processing frame: {frame_id}")
 
     # Segment left page
