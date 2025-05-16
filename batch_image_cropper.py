@@ -3,16 +3,14 @@ import os
 import numpy as np
 from matplotlib import pyplot as plt
 
+import flor
+
 
 def load_images_from_folder(folder):
-    """Load all images from a folder."""
-    images = []
+    """Load all images from a folder as a generator."""
     for filename in sorted(os.listdir(folder)):
         if filename.lower().endswith((".png", ".jpg", ".jpeg")):
-            img = cv2.imread(os.path.join(folder, filename))
-            if img is not None:
-                images.append((filename, img))
-    return images
+            yield filename, cv2.imread(os.path.join(folder, filename))
 
 
 def select_crop_box(image):
@@ -22,26 +20,34 @@ def select_crop_box(image):
     return r
 
 
-def crop_images(images, crop_box):
+def crop_images(image_generator, crop_box):
     """Crop all images using the initial crop box, with the option to adjust."""
     cropped_images = []
-    for i, (filename, img) in enumerate(images):
-        print(f"Processing {filename}...")
-        if i == 0:
-            x, y, w, h = crop_box
-        else:
-            cv2.imshow("Current Image", img)
-            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+    x, y, w, h = crop_box
+
+    for i, (filename, img) in enumerate(image_generator):
+        while True:  # Loop until the user confirms or adjusts the crop box
+            print(f"Processing {filename}...")
+            img_copy = img.copy()
+            cv2.rectangle(img_copy, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.imshow(
+                "Verify Crop Box (Press 'a' to adjust, 's' to confirm, 'q' to quit)",
+                img_copy,
+            )
             key = cv2.waitKey(0)
+
             if key == ord("a"):  # Adjust crop box
                 x, y, w, h = select_crop_box(img)
-            elif key == ord("s"):  # Skip adjustment
-                pass
-            elif key == ord("q"):  # Quit
+            elif key == ord("s"):  # Confirm crop box
                 break
-            cv2.destroyAllWindows()
+            elif key == ord("q"):  # Quit
+                cv2.destroyAllWindows()
+                return cropped_images
+
+        cv2.destroyAllWindows()
         cropped = img[y : y + h, x : x + w]
         cropped_images.append((filename, cropped))
+
     return cropped_images
 
 
@@ -55,18 +61,24 @@ def save_cropped_images(cropped_images, output_folder):
 
 
 def main():
-    input_folder = input("Enter the input folder path: ")
-    output_folder = input("Enter the output folder path: ")
+    input_folder = flor.arg(
+        "input_folder", os.path.join("test_frames", "FallOfTheRegime")
+    )
+    output_folder = flor.arg("output_folder", os.path.join(input_folder, "cropped"))
+    os.makedirs(output_folder, exist_ok=True)
 
-    images = load_images_from_folder(input_folder)
-    if not images:
+    image_generator = load_images_from_folder(input_folder)
+    first_image = next(image_generator, None)
+    del image_generator  # Clean up the generator
+
+    if first_image is None:
         print("No images found in the folder.")
         return
 
     print("Select the cropping box on the first image.")
-    crop_box = select_crop_box(images[0][1])
+    crop_box = select_crop_box(first_image[1])
 
-    cropped_images = crop_images(images, crop_box)
+    cropped_images = crop_images(load_images_from_folder(input_folder), crop_box)
     save_cropped_images(cropped_images, output_folder)
     print("Batch cropping completed.")
 
