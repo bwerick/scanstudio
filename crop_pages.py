@@ -31,96 +31,108 @@ def track_pages_from_reference(
     left_anchor_px,
     right_anchor_px,
     box_size_ratio,
+    x_offset=-10,  # Default to 0 for no horizontal adjustment
+    y_offset=-10,  # Default to 0 for no vertical adjustment
 ):
-    """Track and crop pages in all frames using optical flow from the reference frame."""
+    """Track and crop a single bounding box in all frames using optical flow."""
     w = median_frame_rgb.shape[1]
     h = median_frame_rgb.shape[0]
     box_w, box_h = int(box_size_ratio[0] * w), int(box_size_ratio[1] * h)
 
     gray_ref = cv2.cvtColor(median_frame_rgb, cv2.COLOR_BGR2GRAY)
-    left_pt = np.array([left_anchor_px], dtype=np.float32)
-    right_pt = np.array([right_anchor_px], dtype=np.float32)
+    top_left_pt = np.array([left_anchor_px], dtype=np.float32)
+    bottom_right_pt = np.array([right_anchor_px], dtype=np.float32)
 
-    left_crops, right_crops = [], []
+    crops = []
 
     for f in flor.loop("frame", frames):
         gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
         tracked_pts, status, _ = cv2.calcOpticalFlowPyrLK(
-            gray_ref, gray, np.vstack([left_pt, right_pt]), None
+            gray_ref, gray, np.vstack([top_left_pt, bottom_right_pt]), None
         )
 
-        left_tracked = tracked_pts[0] if status[0] else left_pt[0]
-        right_tracked = tracked_pts[1] if status[1] else right_pt[0]
+        # Fallback to initial points if tracking fails
+        top_left_tracked = tracked_pts[0] if status[0] else top_left_pt[0]
+        bottom_right_tracked = tracked_pts[1] if status[1] else bottom_right_pt[0]
 
-        lx, ly = int(left_tracked[0]), int(left_tracked[1])
-        rx, ry = int(right_tracked[0]), int(right_tracked[1])
+        # Stabilize bounding box size
+        lx = int(top_left_tracked[0]) + x_offset
+        ly = int(top_left_tracked[1]) + y_offset
+        rx = lx + box_w
+        ry = ly + box_h
 
-        left_crop = f[ly : ly + box_h, lx : lx + box_w]
-        right_crop = f[ry : ry + box_h, rx : rx + box_w]
+        # Debugging: Print coordinates
+        print(
+            f"Top-Left: ({lx}, {ly}), Bottom-Right: ({rx}, {ry}), Offsets: x={x_offset}, y={y_offset}"
+        )
 
-        left_crops.append(left_crop)
-        right_crops.append(right_crop)
+        # Crop the frame
+        crop = f[max(ly, 0) : max(ry, 0), max(lx, 0) : max(rx, 0)]
+        crops.append(crop)
 
-    return left_crops, right_crops
+    return crops
 
 
 image_paths = load_image_sequence()
-median_idx = len(image_paths) // 2
+selected_frame_index = 0
 
 # We'll pause here for user input
-median_frame = cv2.imread(os.path.join(input_dir, str(image_paths[median_idx])))
+median_frame = cv2.imread(
+    os.path.join(input_dir, str(image_paths[selected_frame_index]))
+)
 median_frame_rgb = cv2.cvtColor(median_frame, cv2.COLOR_BGR2RGB)
 
 # Display the median frame for bounding box entry
 plt.figure(figsize=(10, 6))
 plt.imshow(median_frame_rgb)
-plt.title(f"Select anchor points on median frame: {image_paths[median_idx]}")
+plt.title(
+    f"Select the top-left and bottom-right corners of the bounding box: {image_paths[selected_frame_index]}"
+)
 plt.axis("off")
 # plt.show()
 
-# Prompt user to select two anchor points (left and right) on the displayed image
+# Prompt user to select two points (top-left and bottom-right) on the displayed image
 print(
-    "Please click on the LEFT anchor point, then the RIGHT anchor point in the matplotlib window."
+    "Please click on the TOP-LEFT corner, then the BOTTOM-RIGHT corner of the bounding box in the matplotlib window."
 )
-anchors = plt.ginput(2, timeout=0)
-if len(anchors) != 2:
-    raise ValueError("You must select exactly two anchor points.")
+bbox_points = plt.ginput(2, timeout=0)
+if len(bbox_points) != 2:
+    raise ValueError("You must select exactly two points.")
 plt.close()
-left_anchor = anchors[0]
-right_anchor = anchors[1]
-left_anchor = (int(left_anchor[0]), int(left_anchor[1]))
-right_anchor = (int(right_anchor[0]), int(right_anchor[1]))
 
+# Extract the top-left and bottom-right points
+top_left = bbox_points[0]
+bottom_right = bbox_points[1]
 
-# Infer bbox size from the selected points
+# Convert to integer pixel coordinates
+top_left = (int(top_left[0]), int(top_left[1]))
+bottom_right = (int(bottom_right[0]), int(bottom_right[1]))
+
+# Calculate bounding box dimensions
+box_width = bottom_right[0] - top_left[0]
+box_height = bottom_right[1] - top_left[1]
+
+# Infer bbox size ratio from the bounding box dimensions
 box_size_ratio = (
-    abs(left_anchor[0] - right_anchor[0]) / median_frame.shape[1],  # width
-    0.55,
-)  # height
+    min(box_width / median_frame.shape[1] + 0.1, 1.0),  # width ratio
+    min(box_height / median_frame.shape[0] + 0.1, 1.0),  # height ratio
+)
 
-
-# right_anchor = (right_anchor[0], left_anchor[1])  # Align y-coordinates for right anchor
-
-# Call the tracking function correctly
-left_crops, right_crops = track_pages_from_reference(
+# Call the tracking function with the bounding box points
+crops = track_pages_from_reference(
     frames_generator(image_paths),  # all frames
     median_frame_rgb=median_frame_rgb,
-    left_anchor_px=left_anchor,
-    right_anchor_px=right_anchor,
+    left_anchor_px=top_left,  # Use top-left as the anchor
+    right_anchor_px=bottom_right,  # Use bottom-right as the anchor
     box_size_ratio=box_size_ratio,
+    x_offset=-20,  # No horizontal offset needed for a single bounding box
+    y_offset=10,  # No vertical offset needed for a single bounding box
 )
 
-# Save cropped pages to output folders
-left_dir = os.path.join("left_pages", os.path.basename(input_dir))
-right_dir = os.path.join("right_pages", os.path.basename(input_dir))
-os.makedirs(left_dir, exist_ok=True)
-os.makedirs(right_dir, exist_ok=True)
+# Save cropped frames to output folder
+output_dir = os.path.join("cropped_pages", os.path.basename(input_dir))
+os.makedirs(output_dir, exist_ok=True)
 
-left_paths = []
-right_paths = []
-
-for i, (l_crop, r_crop) in enumerate(zip(left_crops, right_crops)):
-    l_path = os.path.join(left_dir, f"{i:04d}.jpg")
-    r_path = os.path.join(right_dir, f"{i:04d}.jpg")
-    cv2.imwrite(str(l_path), l_crop)
-    cv2.imwrite(str(r_path), r_crop)
+for i, crop in enumerate(crops):
+    output_path = os.path.join(output_dir, f"{i:04d}.jpg")
+    cv2.imwrite(str(output_path), crop)
