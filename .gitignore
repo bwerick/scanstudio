@@ -198,3 +198,6 @@ pagesegmentnewest.png
 flattest.png
 drjpaper_ocr_comparison_all_frames.xlsx
 DISCONTINUEDcompare_texts.py
+sam_vit_h_4b8939.pth
+downscaledSAM.py
+pagecounter.py
