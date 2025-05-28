@@ -29,7 +29,7 @@ $(OUTPUT_DIR)/%/: Videos/%.mov
 
 $(OUTPUT_DIR)/%/: Videos/%.mp4
 	@echo "Extracting frames from $< to $@"
-	python frameextraction.py --kwargs out_path=$(OUTPUT_DIR) video=$<
+	cloudexe --gpuspec H100x1 -- /root/rolando/segmentation/.venv/bin/python3 frameextraction.py --kwargs out_path=$(OUTPUT_DIR) video=$<
 
 .PHONY: frameextraction
 frameextraction: $(FRAME_DIRS)
