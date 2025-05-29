@@ -4,8 +4,23 @@ from streamlit_cropper import st_cropper
 import os
 import flor
 
+test_frames = [
+    each
+    for each in os.listdir("test_frames")
+    if os.path.isdir(os.path.join("test_frames", each))
+    and os.listdir(os.path.join("test_frames", each))
+]
+if not test_frames:
+    raise ValueError(
+        "No test frames found in 'test_frames' directory. Did you run precursor steps i.e. w/ Make? Please add some directories with images."
+    )
+
+first_test_frame = test_frames[0]
+
 # Constants
-SOURCE_DIR = flor.arg("input_dir", os.path.join("test_frames", "metaphysics"))
+SOURCE_DIR = flor.arg(
+    "input_dir", default=os.path.join("test_frames", first_test_frame)
+)
 CROPPED_DIR = os.path.join(SOURCE_DIR, "cropped")
 
 # Initialize session state for frame index and crop position
