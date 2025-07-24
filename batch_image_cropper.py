@@ -61,7 +61,9 @@ def save_cropped_images(cropped_images, output_folder):
 
 
 def main():
-    input_folder = flor.arg("input_folder", os.path.join("test_frames", "WebOfBelief"))
+    input_folder = flor.arg(
+        "input_folder", os.path.join("test_frames", "APRE_Insta360")
+    )
     output_folder = flor.arg("output_folder", os.path.join(input_folder, "cropped"))
     os.makedirs(output_folder, exist_ok=True)
 

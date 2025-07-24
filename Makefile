@@ -10,9 +10,17 @@ OUTPUT_DIR = test_frames
 # Extract the base names of videos: video1.mp4 → video1
 BASENAMES = $(notdir $(basename $(VIDEOS)))
 
-.PHONY: all
-all: frameextraction doctr_ocr easy_ocr
+DIRS := $(wildcard test_frames/*)             
+PDFS := $(patsubst test_frames/%,%.pdf,$(DIRS))
 
+
+debug:
+	echo $(PDFS)
+	echo $(DIRS)
+
+.PHONY: all pdfs
+all: frameextraction doctr_ocr easy_ocr
+pdfs: $(PDFS)
 
 
 ../sam_vit_h_4b8939.pth: 
@@ -89,3 +97,10 @@ clean:
 	python3 -m venv .venv
 
 
+# ---------------------------------------------------------------------------
+# Pattern rule: “stem”.pdf ← test_frames/“stem”/*.jpg
+# $*  → stem (directory name without path)
+# $@ → target PDF
+# ---------------------------------------------------------------------------
+%.pdf:
+	magick $(OUTPUT_DIR)/$*/cropped/*.jpg $@
