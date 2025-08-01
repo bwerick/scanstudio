@@ -1,96 +1,102 @@
-import streamlit as st
-from PIL import Image
-from streamlit_cropper import st_cropper
 import os
-import flor
+from PIL import Image
+import streamlit as st
+from streamlit_cropper import st_cropper
+import flor  # optional CLI override
 
+# ──────────────────────────────────────────────────────────────────────
+# 1. Discover a subfolder in test_frames that contains images
+# ──────────────────────────────────────────────────────────────────────
 test_frames = [
-    each
-    for each in os.listdir("test_frames")
-    if os.path.isdir(os.path.join("test_frames", each))
-    and os.listdir(os.path.join("test_frames", each))
+    d for d in os.listdir("test_frames")
+    if os.path.isdir(os.path.join("test_frames", d))
+       and any(f.lower().endswith((".png", ".jpg", ".jpeg"))
+               for f in os.listdir(os.path.join("test_frames", d)))
 ]
 if not test_frames:
     raise ValueError(
-        "No test frames found in 'test_frames' directory. Did you run precursor steps i.e. w/ Make? Please add some directories with images."
+        "No test frames found under 'test_frames/'. "
+        "Add a sub-directory with images first."
     )
 
 first_test_frame = test_frames[0]
 
-# Constants
-SOURCE_DIR = flor.arg(
-    "input_dir", default=os.path.join("test_frames", first_test_frame)
-)
+# Folder paths (can be overridden with `--input_dir=...` via Flor)
+SOURCE_DIR  = flor.arg("input_dir", default=os.path.join("test_frames", first_test_frame))
 CROPPED_DIR = os.path.join(SOURCE_DIR, "cropped")
 
-# Initialize session state for frame index and crop position
+# ──────────────────────────────────────────────────────────────────────
+# 2. Streamlit app configuration
+# ──────────────────────────────────────────────────────────────────────
+st.set_page_config(page_title="Batch Image Cropper", layout="centered")
+st.title("🖼️ Batch Image Cropper – Dynamic ROI")
+
+# Ensure destination folder exists
+os.makedirs(CROPPED_DIR, exist_ok=True)
+
+# Build list of images
+image_files = sorted(
+    f for f in os.listdir(SOURCE_DIR)
+    if f.lower().endswith((".png", ".jpg", ".jpeg"))
+)
+if not image_files:
+    st.error(f"No images found in '{SOURCE_DIR}'.")
+    st.stop()
+
+# ──────────────────────────────────────────────────────────────────────
+# 3. Persistent session state
+# ──────────────────────────────────────────────────────────────────────
 if "frame_index" not in st.session_state:
     st.session_state.frame_index = 0
-if "crop_position" not in st.session_state:
-    st.session_state.crop_position = {"left": 0, "top": 0}
 
-# UI
-st.set_page_config(page_title="Batch Image Cropper", layout="centered")
-st.title("🖼️ Server-Side Batch Cropper - Dataflow Step")
+# Handy aliases
+idx  = st.session_state.frame_index
+name = image_files[idx]
 
-# Ensure directories exist
-if not os.path.exists(SOURCE_DIR):
-    st.error(f"Directory `{SOURCE_DIR}` does not exist.")
-else:
-    os.makedirs(CROPPED_DIR, exist_ok=True)
+# ──────────────────────────────────────────────────────────────────────
+# 4. Load & display cropper
+# ──────────────────────────────────────────────────────────────────────
+img_path = os.path.join(SOURCE_DIR, name)
+image    = Image.open(img_path)
 
-    image_files = sorted(
-        [
-            f
-            for f in os.listdir(SOURCE_DIR)
-            if f.lower().endswith((".jpg", ".jpeg", ".png"))
-            and os.path.isfile(os.path.join(SOURCE_DIR, f))
-        ]
-    )
+st.markdown(f"### Frame {idx + 1} / {len(image_files)} — `{name}`")
+st.markdown("Drag to select the region you wish to keep, then click **Accept Crop**.")
 
-    if not image_files:
-        st.warning("No image files found.")
-    else:
-        # Get the current frame
-        current_frame = st.session_state.frame_index
-        sample_path = os.path.join(SOURCE_DIR, image_files[current_frame])
-        sample_image = Image.open(sample_path)
+cropped_img = st_cropper(
+    image,
+    box_color="#00FF00",
+    aspect_ratio=None,      # free aspect ratio
+    return_type="image",    # returns PIL.Image
+    realtime_update=True,
+    key=name                # isolate widget state per image
+)
 
-        st.markdown(f"### Frame {current_frame + 1} of {len(image_files)}")
-        st.image(
-            sample_image,
-            caption=f"Current Frame: {image_files[current_frame]}",
-            use_container_width=True,
-        )
+st.image(cropped_img, caption="Preview Crop", use_container_width=True)
 
-        # Adjust crop position
-        left = st.number_input(
-            "Left", value=st.session_state.crop_position["left"], step=10
-        )
-        top = st.number_input(
-            "Top", value=st.session_state.crop_position["top"], step=10
-        )
-        width = 300  # Fixed width
-        height = 300  # Fixed height
+# ──────────────────────────────────────────────────────────────────────
+# 5. Navigation & save handlers
+# ──────────────────────────────────────────────────────────────────────
+def save_crop():
+    out_path = os.path.join(CROPPED_DIR, name)
+    cropped_img.save(out_path)
+    st.success(f"Cropped image saved → `{out_path}`")
 
-        # Update crop position in session state
-        st.session_state.crop_position = {"left": left, "top": top}
+def prev_frame():
+    if st.session_state.frame_index > 0:
+        st.session_state.frame_index -= 1
+        st.rerun()  # ← new API
 
-        # Preview the crop
-        preview_crop = sample_image.crop((left, top, left + width, top + height))
-        st.image(preview_crop, caption="Preview Crop", use_container_width=True)
+def next_frame():
+    if st.session_state.frame_index < len(image_files) - 1:
+        st.session_state.frame_index += 1
+        st.rerun()  # ← new API
 
-        # Navigation buttons
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col1:
-            if st.button("⬅️ Previous", disabled=current_frame == 0):
-                st.session_state.frame_index -= 1
-        with col2:
-            if st.button("✅ Accept Crop"):
-                # Save the cropped image
-                out_path = os.path.join(CROPPED_DIR, image_files[current_frame])
-                preview_crop.save(out_path)
-                st.success(f"Cropped image saved to `{out_path}`.")
-        with col3:
-            if st.button("➡️ Next", disabled=current_frame == len(image_files) - 1):
-                st.session_state.frame_index += 1
+# Button layout
+c1, c2, c3 = st.columns([1, 1, 1])
+with c1:
+    st.button("⬅️ Previous", on_click=prev_frame, disabled=idx == 0)
+with c2:
+    st.button("✅ Accept Crop", on_click=save_crop)
+with c3:
+    st.button("➡️ Next", on_click=next_frame, disabled=idx == len(image_files) - 1)
+
