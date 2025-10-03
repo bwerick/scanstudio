@@ -14,12 +14,9 @@ DIRS := $(wildcard test_frames/*)
 PDFS := $(patsubst test_frames/%,%.pdf,$(DIRS))
 
 
-debug:
-	echo $(PDFS)
-	echo $(DIRS)
 
 .PHONY: all pdfs
-all: frameextraction doctr_ocr easy_ocr
+all: frameextraction
 pdfs: $(PDFS)
 
 
@@ -42,6 +39,10 @@ $(OUTPUT_DIR)/%/: Videos/%.mp4
 .PHONY: frameextraction
 frameextraction: $(FRAME_DIRS)
 %.jpg: $(FRAME_DIRS)
+
+.PHONY: keyframes
+keyframes: frameextraction
+	python keyframe_extraction.py --frames-root $(OUTPUT_DIR)
 
 # Marker-pdf extraction 
 MARKDOWNS = $(FRAME_IMAGES:.jpg=.md)

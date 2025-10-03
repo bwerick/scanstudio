@@ -3,7 +3,7 @@ import cv2
 import multiprocessing
 import os
 import sys
-import flor
+import flordb as flor
 
 """
 This script extracts frames from a video using OpenCV and saves them to a specified directory.
@@ -188,6 +188,6 @@ if __name__ == "__main__":
         video_path=video_path,
         frames_dir=frames_dir,
         overwrite=False,
-        every=flor.arg("every", 15),
+        every=flor.arg("every", 6),
         chunk_size=flor.arg("chunk_size", 512),
     )
