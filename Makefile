@@ -16,7 +16,7 @@ PDFS := $(patsubst test_frames/%,%.pdf,$(DIRS))
 
 
 .PHONY: all pdfs
-all: frameextraction
+all: keyframes
 pdfs: $(PDFS)
 
 

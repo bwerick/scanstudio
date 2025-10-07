@@ -207,3 +207,6 @@ batchSAM.py
 0000000000Cover.png
 test.py
 Makefile
+
+# ignore pdf files
+*.pdf
