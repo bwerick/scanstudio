@@ -40,9 +40,24 @@ $(OUTPUT_DIR)/%/: Videos/%.mp4
 frameextraction: $(FRAME_DIRS)
 %.jpg: $(FRAME_DIRS)
 
-.PHONY: keyframes
-keyframes: frameextraction
+$(OUTPUT_DIR)/%/keyframes: Videos/%.mov
+	@echo "Extracting keyframes from $< to $@"
 	python keyframe_extraction.py --frames-root $(OUTPUT_DIR)
+
+$(OUTPUT_DIR)/%/keyframes: Videos/%.mp4
+	@echo "Extracting keyframes from $< to $@"
+	python keyframe_extraction.py --frames-root $(OUTPUT_DIR)
+
+KEY_FRAMES_DIRS = $(addsuffix keyframes/,$(FRAME_DIRS))
+
+.PHONY: keyframes
+keyframes: $(FRAME_DIRS) $(KEY_FRAMES_DIRS)
+
+# add target to run streamlit_keyframes
+.PHONY: streamlit_keyframes
+streamlit_keyframes: keyframes streamlit_keyframes.py
+	@echo "Running Streamlit app for keyframes"
+	streamlit run streamlit_keyframes.py
 
 # Marker-pdf extraction 
 MARKDOWNS = $(FRAME_IMAGES:.jpg=.md)
