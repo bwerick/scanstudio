@@ -119,4 +119,5 @@ clean:
 # $@ → target PDF
 # ---------------------------------------------------------------------------
 %.pdf:
-	magick $(OUTPUT_DIR)/$*/cropped/*.jpg $@
+# 	magick $(OUTPUT_DIR)/$*/cropped/*.jpg $@
+	magick $(OUTPUT_DIR)/$*/cropped/*.jpg -resize '1024x>' -quality 85 -interlace Plane $@
