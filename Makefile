@@ -53,6 +53,21 @@ KEY_FRAMES_DIRS = $(addsuffix keyframes/,$(FRAME_DIRS))
 .PHONY: keyframes
 keyframes: $(FRAME_DIRS) $(KEY_FRAMES_DIRS)
 
+$(OUTPUT_DIR)/%/left: $(OUTPUT_DIR)/%/keyframes
+	@echo "Cropping left side of keyframes in $< to $@"
+	python batch_image_cropper.py --kwargs book=$* side=left
+
+$(OUTPUT_DIR)/%/right: $(OUTPUT_DIR)/%/keyframes
+	@echo "Cropping right side of keyframes in $< to $@"
+	python batch_image_cropper.py --kwargs book=$* side=right
+
+
+$(OUTPUT_DIR)/%/cropped: $(OUTPUT_DIR)/%/left $(OUTPUT_DIR)/%/right
+	@echo "Merging cropped images in $@"
+	mkdir -p $@
+	mv $(word 1,$^)/* $@
+	mv $(word 2,$^)/* $@
+
 # add target to run streamlit_keyframes
 .PHONY: streamlit_keyframes
 streamlit_keyframes: keyframes streamlit_keyframes.py
@@ -118,6 +133,9 @@ clean:
 # $*  → stem (directory name without path)
 # $@ → target PDF
 # ---------------------------------------------------------------------------
-%.pdf:
-# 	magick $(OUTPUT_DIR)/$*/cropped/*.jpg $@
-	magick $(OUTPUT_DIR)/$*/cropped/*.jpg -resize '512x>' -quality 95 -interlace Plane $@
+%.pdf: $(OUTPUT_DIR)/%/cropped
+	@echo "Building $@ from images in $<"
+	# Collect .jpg and .png (empty if none); then call ImageMagick
+	@imgs="$(wildcard $</*.jpg) $(wildcard $</*.png)"; \
+		test -n "$$imgs" || { echo "No images found in $</"; exit 1; }; \
+		magick $$imgs -resize '512x>' -quality 95 -interlace Plane $@

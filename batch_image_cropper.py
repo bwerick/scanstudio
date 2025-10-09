@@ -51,10 +51,17 @@ def crop_images(image_generator, crop_box):
     return cropped_images
 
 
-def save_cropped_images(cropped_images, output_folder):
+def save_cropped_images(cropped_images, output_folder, side="cropped"):
     """Save cropped images to the output folder."""
     os.makedirs(output_folder, exist_ok=True)
     for filename, cropped in cropped_images:
+        # Modify filename to include side information
+        name, ext = os.path.splitext(filename)
+        if side.lower() == "left":
+            name += "L"
+        elif side.lower() == "right":
+            name += "R"
+        filename = f"{name}{ext}"
         output_path = os.path.join(output_folder, filename)
         cv2.imwrite(output_path, cropped)
         print(f"Saved {output_path}")
@@ -63,8 +70,10 @@ def save_cropped_images(cropped_images, output_folder):
 def main():
 
     book = flor.arg("book", "greenbook")
+    side = flor.arg("side", "cropped")
+    # side in ("cropped", "left", "right")
     input_folder = os.path.join("test_frames", book, "keyframes")
-    output_folder = os.path.join("test_frames", book, "cropped")
+    output_folder = os.path.join("test_frames", book, side)
     os.makedirs(output_folder, exist_ok=True)
 
     image_generator = load_images_from_folder(input_folder)
@@ -79,7 +88,7 @@ def main():
     crop_box = select_crop_box(first_image[1])
 
     cropped_images = crop_images(load_images_from_folder(input_folder), crop_box)
-    save_cropped_images(cropped_images, output_folder)
+    save_cropped_images(cropped_images, output_folder, side)
     print("Batch cropping completed.")
 
 
