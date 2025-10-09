@@ -165,7 +165,7 @@ def main() -> None:
             raise FileNotFoundError(f"Frames root {root} does not exist.")
         directories = collect_frame_dirs(root)
 
-    min_similarity = flor.arg("min-similarity", 0.91)
+    min_similarity = flor.arg("min-similarity", 0.92)
     sharpness_floor = flor.arg("sharpness-floor", 0.1)
 
     total = 0

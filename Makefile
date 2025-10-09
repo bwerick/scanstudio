@@ -40,13 +40,10 @@ $(OUTPUT_DIR)/%/: Videos/%.mp4
 frameextraction: $(FRAME_DIRS)
 %.jpg: $(FRAME_DIRS)
 
-$(OUTPUT_DIR)/%/keyframes: Videos/%.mov
+$(OUTPUT_DIR)/%/keyframes: $(OUTPUT_DIR)/%
 	@echo "Extracting keyframes from $< to $@"
 	python keyframe_extraction.py --frames-root $(OUTPUT_DIR)
 
-$(OUTPUT_DIR)/%/keyframes: Videos/%.mp4
-	@echo "Extracting keyframes from $< to $@"
-	python keyframe_extraction.py --frames-root $(OUTPUT_DIR)
 
 KEY_FRAMES_DIRS = $(addsuffix keyframes/,$(FRAME_DIRS))
 
@@ -133,9 +130,9 @@ clean:
 # $*  → stem (directory name without path)
 # $@ → target PDF
 # ---------------------------------------------------------------------------
-%.pdf: $(OUTPUT_DIR)/%/cropped
+%.pdf: $(OUTPUT_DIR)/%/
 	@echo "Building $@ from images in $<"
 	# Collect .jpg and .png (empty if none); then call ImageMagick
-	@imgs="$(wildcard $</*.jpg) $(wildcard $</*.png)"; \
+	@imgs="$(wildcard $</cropped/*.jpg) $(wildcard $</cropped/*.png)"; \
 		test -n "$$imgs" || { echo "No images found in $</"; exit 1; }; \
 		magick $$imgs -resize '512x>' -quality 95 -interlace Plane $@
