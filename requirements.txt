@@ -1,5 +1,5 @@
 Pillow
-flordb>=3.4.10
+flordb>=3.4.12
 torch
 python-doctr[torch]
 opencv-python
