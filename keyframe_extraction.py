@@ -10,7 +10,7 @@ import flordb as flor
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
 
 
-def compute_histogram(image) -> Optional[cv2.Mat]:
+def compute_histogram(image):
     hist = cv2.calcHist(
         [image], [0, 1, 2], None, [16, 16, 16], [0, 256, 0, 256, 0, 256]
     )

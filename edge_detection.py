@@ -1,7 +1,7 @@
 import cv2
 import os
 import numpy as np
-import flor
+import flordb as flor
 
 # Global variables to store points
 points = []
@@ -26,6 +26,7 @@ def crop_with_two_clicks(image_path):
     global points
     points = []  # Reset points
     image = cv2.imread(image_path)
+    assert image is not None, "Failed to load image."
     clone = image.copy()
 
     cv2.imshow("Original Image", image)
@@ -62,52 +63,69 @@ def track_and_crop_frames(directory, points):
         ]
     )
     first_frame = cv2.imread(frame_paths[0])
+    assert first_frame is not None, "Failed to load the first frame."
     h, w = first_frame.shape[:2]
 
     # Initialize optical flow tracking
     prev_gray = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
-    prev_points = np.array([[x1, y1], [x2, y2]], dtype=np.float32)
+    prev_points = np.array([[x1, y1], [x2, y2]], dtype=np.float32).reshape(-1, 1, 2)
 
     output_dir = os.path.join(directory, "cropped_frames")
     os.makedirs(output_dir, exist_ok=True)
 
     for i, frame_path in enumerate(frame_paths):
         frame = cv2.imread(frame_path)
+        assert frame is not None, f"Failed to load frame: {frame_path}"
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        h, w = frame.shape[:2]
 
-        # Track points using optical flow
-        next_points, status, _ = cv2.calcOpticalFlowPyrLK(
-            prev_gray, gray, prev_points, None, winSize=(21, 21), maxLevel=3
+        # Track points using optical flow (preallocate nextPts to satisfy type stubs)
+        next_pts_init = np.empty_like(prev_points)
+        next_points, status, err = cv2.calcOpticalFlowPyrLK(
+            prev_gray,
+            gray,
+            prev_points,
+            next_pts_init,
+            winSize=(21, 21),
+            maxLevel=3,
+            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01),
         )
 
         # Update bounding box based on tracked points
-        if status[0][0] and status[1][0]:  # Ensure both points are tracked successfully
-            x1, y1 = next_points[0].ravel()
-            x2, y2 = next_points[1].ravel()
-            x_start, x_end = int(min(x1, x2)), int(max(x1, x2))
-            y_start, y_end = int(min(y1, y2)), int(max(y1, y2))
+        if next_points is not None and status is not None and bool(np.all(status.ravel())):
+            pts = next_points.reshape(-1, 2)
+            x1, y1 = pts[0]
+            x2, y2 = pts[1]
+            x_start = int(max(0, min(x1, x2)))
+            x_end   = int(min(w, max(x1, x2)))
+            y_start = int(max(0, min(y1, y2)))
+            y_end   = int(min(h, max(y1, y2)))
 
-            # Crop the frame
-            cropped = frame[
-                max(0, y_start) : min(h, y_end), max(0, x_start) : min(w, x_end)
-            ]
+            if x_end > x_start and y_end > y_start:
+                cropped = frame[y_start:y_end, x_start:x_end]
+                output_path = os.path.join(output_dir, f"{i:04d}.jpg")
+                cv2.imwrite(output_path, cropped)
+                print(f"Cropped frame saved to: {output_path}")
 
-            # Save the cropped frame
-            output_path = os.path.join(output_dir, f"{i:04d}.jpg")
-            cv2.imwrite(output_path, cropped)
-            print(f"Cropped frame saved to: {output_path}")
-
-            # Update previous frame and points
             prev_gray = gray
-            prev_points = next_points
+            prev_points = next_points.reshape(-1, 1, 2)
         else:
             print(f"Tracking failed for frame {i}. Reinitializing points.")
+            # Optional: restrict detection near last ROI
+            pad = 20
+            xs, xe = max(0, int(min(x1, x2)) - pad), min(w, int(max(x1, x2)) + pad)
+            ys, ye = max(0, int(min(y1, y2)) - pad), min(h, int(max(y1, y2)) + pad)
+            mask = np.zeros_like(gray)
+            cv2.rectangle(mask, (xs, ys), (xe, ye), 255, -1)
+
             prev_points = cv2.goodFeaturesToTrack(
-                gray, maxCorners=2, qualityLevel=0.01, minDistance=10, mask=None
+                gray, maxCorners=2, qualityLevel=0.01, minDistance=10, mask=mask
             )
             if prev_points is None or len(prev_points) < 2:
                 print(f"Reinitialization failed for frame {i}. Skipping.")
                 continue
+            prev_points = prev_points.astype(np.float32).reshape(-1, 1, 2)
+            prev_gray = gray
 
 
 if __name__ == "__main__":
