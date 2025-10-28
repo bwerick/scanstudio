@@ -40,7 +40,7 @@ $(OUTPUT_DIR)/%/: Videos/%.mp4
 frameextraction: $(FRAME_DIRS)
 %.jpg: $(FRAME_DIRS)
 
-$(OUTPUT_DIR)/%/keyframes: $(OUTPUT_DIR)/%
+$(OUTPUT_DIR)/%/keyframes/: $(OUTPUT_DIR)/%
 	@echo "Extracting keyframes from $< to $@"
 	python keyframe_extraction.py --frames-root $(OUTPUT_DIR)
 
@@ -50,16 +50,16 @@ KEY_FRAMES_DIRS = $(addsuffix keyframes/,$(FRAME_DIRS))
 .PHONY: keyframes
 keyframes: $(FRAME_DIRS) $(KEY_FRAMES_DIRS)
 
-$(OUTPUT_DIR)/%/left: $(OUTPUT_DIR)/%/keyframes
+$(OUTPUT_DIR)/%/left/: $(OUTPUT_DIR)/%/keyframes
 	@echo "Cropping left side of keyframes in $< to $@"
 	python batch_image_cropper.py --kwargs book=$* side=left
 
-$(OUTPUT_DIR)/%/right: $(OUTPUT_DIR)/%/keyframes
+$(OUTPUT_DIR)/%/right/: $(OUTPUT_DIR)/%/keyframes
 	@echo "Cropping right side of keyframes in $< to $@"
 	python batch_image_cropper.py --kwargs book=$* side=right
 
 
-$(OUTPUT_DIR)/%/cropped: $(OUTPUT_DIR)/%/left $(OUTPUT_DIR)/%/right
+$(OUTPUT_DIR)/%/cropped/: $(OUTPUT_DIR)/%/left $(OUTPUT_DIR)/%/right
 	@echo "Merging cropped images in $@"
 	mkdir -p $@
 	mv $(word 1,$^)/* $@
