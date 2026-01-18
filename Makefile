@@ -1,138 +1,183 @@
-#  _____ __    _____ _____ _____ __    _____ _____ 
-# |   __|  |  |     | __  |  _  |  |  |  _  |   | |
-# |   __|  |__|  |  |    -|   __|  |__|     | | | |
-# |__|  |_____|_____|__|__|__|  |_____|__|__|_|___|
-#         
+# ============================
+# Clean pipeline Makefile
+# ============================
 
-VIDEOS ?= $(wildcard Videos/*.mp4 Videos/*.mov)
-OUTPUT_DIR = test_frames
+VIDEO_DIR   := Videos
+OUTPUT_DIR  := test_frames
 
-# Extract the base names of videos: video1.mp4 → video1
-BASENAMES = $(notdir $(basename $(VIDEOS)))
+# Discover videos; derive BOOK names from filenames.
+VIDEOS := $(wildcard $(VIDEO_DIR)/*.mp4 $(VIDEO_DIR)/*.mov)
+BOOKS  := $(notdir $(basename $(VIDEOS)))
 
-DIRS := $(wildcard test_frames/*)             
-PDFS := $(patsubst test_frames/%,%.pdf,$(DIRS))
+# Stamp targets per book
+FRAMES_STAMPS    := $(addprefix $(OUTPUT_DIR)/,$(addsuffix /.frames.stamp,$(BOOKS)))
+KEYFRAMES_STAMPS := $(addprefix $(OUTPUT_DIR)/,$(addsuffix /keyframes/.keyframes.stamp,$(BOOKS)))
+LEFT_STAMPS      := $(addprefix $(OUTPUT_DIR)/,$(addsuffix /left/.left.stamp,$(BOOKS)))
+RIGHT_STAMPS     := $(addprefix $(OUTPUT_DIR)/,$(addsuffix /right/.right.stamp,$(BOOKS)))
+CROPPED_STAMPS   := $(addprefix $(OUTPUT_DIR)/,$(addsuffix /cropped/.cropped.stamp,$(BOOKS)))
 
+PDFS := $(addsuffix .pdf,$(BOOKS))
 
+# Safer make defaults
+.DELETE_ON_ERROR:
+.SUFFIXES:
 
-.PHONY: all pdfs
+# Convenience: print vars with `make print-BOOKS` etc.
+.PHONY: print-%
+print-%:
+	@echo '$*=$($*)'
+
+# Default target
+.PHONY: all
 all: keyframes
-pdfs: $(PDFS)
 
+# ----------------------------
+# Ensure base output directory exists
+# ----------------------------
+$(OUTPUT_DIR):
+	@mkdir -p $@
 
-../sam_vit_h_4b8939.pth: 
+# ----------------------------
+# Model weights (unchanged)
+# ----------------------------
+../sam_vit_h_4b8939.pth:
 	@echo "Downloading SAM model weights"
-	curl -L -o ../sam_vit_h_4b8939.pth https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
+	curl -L -o $@ https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
 
-# Construct output dirs: test_frames/video1/, etc.
-FRAME_DIRS = $(addsuffix /,$(addprefix $(OUTPUT_DIR)/,$(BASENAMES)))
-FRAME_IMAGES = $(wildcard $(OUTPUT_DIR)/*/*.jpg)
+# ----------------------------
+# Frames extraction (single rule for mp4/mov)
+# Uses secondary expansion to pick whichever file exists.
+# ----------------------------
+.SECONDEXPANSION:
 
-$(OUTPUT_DIR)/%/: Videos/%.mov
-	@echo "Extracting frames from $< to $@"
-	python frameextraction.py --kwargs out_path=$(OUTPUT_DIR) video=$<
+$(OUTPUT_DIR)/%/.frames.stamp: frameextraction.py | $(OUTPUT_DIR)
+	$(eval VIDEO_FILE := $(firstword $(wildcard $(VIDEO_DIR)/$*.mp4 $(VIDEO_DIR)/$*.mov)))
+	@test -n "$(VIDEO_FILE)" || { echo "ERROR: no video found for '$*' in $(VIDEO_DIR)/"; exit 1; }
+	@mkdir -p "$(OUTPUT_DIR)/$*"
+	@echo "Extracting frames for $* from $(VIDEO_FILE)"
+	python frameextraction.py --kwargs out_path=$(OUTPUT_DIR) video=$(VIDEO_FILE)
+	@ls -1 "$(OUTPUT_DIR)/$*"/*.jpg >/dev/null 2>&1 || { \
+		echo "ERROR: no frames (*.jpg) produced in $(OUTPUT_DIR)/$*/"; \
+		exit 1; \
+	}
+	@touch $@
 
-$(OUTPUT_DIR)/%/: Videos/%.mp4
-	@echo "Extracting frames from $< to $@"
-	python frameextraction.py --kwargs out_path=$(OUTPUT_DIR) video=$<
+.PHONY: frames
+frames: $(FRAMES_STAMPS)
 
-.PHONY: frameextraction
-frameextraction: $(FRAME_DIRS)
-%.jpg: $(FRAME_DIRS)
-
-$(OUTPUT_DIR)/%/keyframes/: $(OUTPUT_DIR)/%
-	@echo "Extracting keyframes from $< to $@"
+# ----------------------------
+# Keyframes extraction
+# Note: if your python script processes all books at once, that's fine;
+# we still validate per-book outputs so stamps remain truthful.
+# ----------------------------
+$(OUTPUT_DIR)/%/keyframes/.keyframes.stamp: $(OUTPUT_DIR)/%/.frames.stamp keyframe_extraction.py
+	@mkdir -p "$(OUTPUT_DIR)/$*/keyframes"
+	@echo "Extracting keyframes for $*"
 	python keyframe_extraction.py --frames-root $(OUTPUT_DIR)
-
-
-KEY_FRAMES_DIRS = $(addsuffix keyframes/,$(FRAME_DIRS))
+	@ls -1 "$(OUTPUT_DIR)/$*/keyframes"/*.jpg >/dev/null 2>&1 || { \
+		echo "ERROR: no keyframes (*.jpg) produced in $(OUTPUT_DIR)/$*/keyframes/"; \
+		exit 1; \
+	}
+	@touch $@
 
 .PHONY: keyframes
-keyframes: $(FRAME_DIRS) $(KEY_FRAMES_DIRS)
+keyframes: $(KEYFRAMES_STAMPS)
 
-$(OUTPUT_DIR)/%/left/:
-	@echo "Cropping left side of keyframes in $< to $@"
+# ----------------------------
+# Left / Right pages
+# ----------------------------
+$(OUTPUT_DIR)/%/left/.left.stamp: $(OUTPUT_DIR)/%/keyframes/.keyframes.stamp batch_image_cropper.py
+	@mkdir -p "$(OUTPUT_DIR)/$*/left"
+	@echo "Cropping LEFT pages for $*"
 	python batch_image_cropper.py --kwargs book=$* side=left
+	@ls -1 "$(OUTPUT_DIR)/$*/left"/*.jpg >/dev/null 2>&1 || { \
+		echo "ERROR: no LEFT crops (*.jpg) produced in $(OUTPUT_DIR)/$*/left/"; \
+		exit 1; \
+	}
+	@touch $@
 
-$(OUTPUT_DIR)/%/right/: 
-	@echo "Cropping right side of keyframes in $< to $@"
+$(OUTPUT_DIR)/%/right/.right.stamp: $(OUTPUT_DIR)/%/keyframes/.keyframes.stamp batch_image_cropper.py
+	@mkdir -p "$(OUTPUT_DIR)/$*/right"
+	@echo "Cropping RIGHT pages for $*"
 	python batch_image_cropper.py --kwargs book=$* side=right
+	@ls -1 "$(OUTPUT_DIR)/$*/right"/*.jpg >/dev/null 2>&1 || { \
+		echo "ERROR: no RIGHT crops (*.jpg) produced in $(OUTPUT_DIR)/$*/right/"; \
+		exit 1; \
+	}
+	@touch $@
 
+.PHONY: left-pages right-pages
+left-pages:  $(LEFT_STAMPS)
+right-pages: $(RIGHT_STAMPS)
 
-$(OUTPUT_DIR)/%/cropped/: $(OUTPUT_DIR)/%/left $(OUTPUT_DIR)/%/right
-	@echo "Merging cropped images in $@"
-	mkdir -p $@
-	mv $(word 1,$^)/* $@
-	mv $(word 2,$^)/* $@
+# ----------------------------
+# Cropped staging (merge left+right into cropped/)
+# This moves files. If you prefer COPY instead of MOVE, tell me.
+# ----------------------------
+$(OUTPUT_DIR)/%/cropped/.cropped.stamp: $(OUTPUT_DIR)/%/left/.left.stamp $(OUTPUT_DIR)/%/right/.right.stamp
+	@mkdir -p "$(OUTPUT_DIR)/$*/cropped"
+	@echo "Staging cropped images for $*"
+	@rm -rf "$(OUTPUT_DIR)/$*/cropped/"*
+	@mv "$(OUTPUT_DIR)/$*/left/"*  "$(OUTPUT_DIR)/$*/cropped/" 2>/dev/null || true
+	@mv "$(OUTPUT_DIR)/$*/right/"* "$(OUTPUT_DIR)/$*/cropped/" 2>/dev/null || true
+	@ls -1 "$(OUTPUT_DIR)/$*/cropped"/*.jpg >/dev/null 2>&1 || { \
+		echo "ERROR: no staged crops (*.jpg) in $(OUTPUT_DIR)/$*/cropped/"; \
+		exit 1; \
+	}
+	@touch $@
 
-# add target to run streamlit_keyframes
+.PHONY: cropped
+cropped: $(CROPPED_STAMPS)
+
+# ----------------------------
+# Final PDFs: make <book>.pdf
+# ----------------------------
+%.pdf: $(OUTPUT_DIR)/%/cropped/.cropped.stamp
+	@echo "Building $@ from $(OUTPUT_DIR)/$*/cropped/"
+	@set -e; \
+	cd "$(OUTPUT_DIR)/$*/cropped"; \
+	shopt -s nullglob; \
+	images=( *.jpg *.png ); \
+	[ "$${#images[@]}" -gt 0 ] || { echo "ERROR: no images in $(OUTPUT_DIR)/$*/cropped/"; exit 1; }; \
+	magick "$${images[@]}" -resize '512x>' -quality 95 -interlace Plane "$(abspath $@)"
+
+.PHONY: pdfs
+pdfs: $(PDFS)
+
+# ----------------------------
+# Streamlit helper
+# ----------------------------
 .PHONY: streamlit_keyframes
 streamlit_keyframes: keyframes streamlit_keyframes.py
 	@echo "Running Streamlit app for keyframes"
 	streamlit run streamlit_keyframes.py
 
-# Marker-pdf extraction 
-MARKDOWNS = $(FRAME_IMAGES:.jpg=.md)
-%.md: %.jpg
-	@echo "Generating Markdown for $<"
-	convert $< -strip -interlace Plane -quality 100% intermediate.jpg
-	marker_single intermediate.jpg $@
-	@rm -f intermediate.jpg
-
-.PHONY: generate_md
-generate_md: $(MARKDOWNS)
-
-# OCR with doctr
-DOCTR_TXTS = $(FRAME_IMAGES:.jpg=_doctr.txt)
-%_doctr.txt: %.jpg
-	@echo "Generating doctr OCR text for $<"
-	python ocr.py --kwargs frame=$< out_path=$@ ocr_mode=doctr
-
-.PHONY: doctr_ocr
-doctr_ocr: $(DOCTR_TXTS)
-
-# OCR with easyOCR
-EASYOCR_TXTS = $(FRAME_IMAGES:.jpg=_easyocr.txt)
-%_easyocr.txt: %.jpg
-	@echo "Generating easyOCR text for $<"
-	python ocr.py --kwargs frame=$< out_path=$@ ocr_mode=easyocr
-
-.PHONY: easy_ocr
-easy_ocr: $(EASYOCR_TXTS)
-
+# ----------------------------
+# Install / clean
+# ----------------------------
 .PHONY: install
-install: 
+install:
 	pip install -r requirements.txt
-
-
-.PHONY: install_opencv
-install_opencv:
-	@if [ "$$(uname)" = "Darwin" ]; then \
-		echo "Installing OpenCV using Homebrew on macOS"; \
-		brew install opencv; \
-	else \
-		echo "Installing OpenCV using apt-get on Linux"; \
-		apt-get update && apt-get install -y python3-opencv; \
-	fi
-
 
 .PHONY: clean
 clean:
-	rm -rf $(OUTPUT_DIR)
+	rm -rf "$(OUTPUT_DIR)" *.pdf
 
-# create .venv
-.venv:
-	python3 -m venv .venv
+# ----------------------------
+# Force rebuild helpers
+# ----------------------------
+.PHONY: force-frames force-keyframes force-left force-right force-cropped
+force-frames:
+	@rm -f $(FRAMES_STAMPS)
 
+force-keyframes:
+	@rm -f $(KEYFRAMES_STAMPS)
 
-# ---------------------------------------------------------------------------
-# Pattern rule: “stem”.pdf ← test_frames/“stem”/*.jpg
-# $*  → stem (directory name without path)
-# $@ → target PDF
-# ---------------------------------------------------------------------------
-%.pdf: $(OUTPUT_DIR)/%/
-	@echo "Building $@ from images in $<"
-	# Collect .jpg and .png (empty if none); then call ImageMagick
-	@imgs="$(wildcard $</cropped/*.jpg) $(wildcard $</cropped/*.png)"; \
-		test -n "$$imgs" || { echo "No images found in $</"; exit 1; }; \
-		magick $$imgs -resize '512x>' -quality 95 -interlace Plane $@
+force-left:
+	@rm -f $(LEFT_STAMPS)
+
+force-right:
+	@rm -f $(RIGHT_STAMPS)
+
+force-cropped:
+	@rm -f $(CROPPED_STAMPS)
