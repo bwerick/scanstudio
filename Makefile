@@ -50,11 +50,11 @@ KEY_FRAMES_DIRS = $(addsuffix keyframes/,$(FRAME_DIRS))
 .PHONY: keyframes
 keyframes: $(FRAME_DIRS) $(KEY_FRAMES_DIRS)
 
-$(OUTPUT_DIR)/%/left/: $(OUTPUT_DIR)/%/keyframes
+$(OUTPUT_DIR)/%/left/:
 	@echo "Cropping left side of keyframes in $< to $@"
 	python batch_image_cropper.py --kwargs book=$* side=left
 
-$(OUTPUT_DIR)/%/right/: $(OUTPUT_DIR)/%/keyframes
+$(OUTPUT_DIR)/%/right/: 
 	@echo "Cropping right side of keyframes in $< to $@"
 	python batch_image_cropper.py --kwargs book=$* side=right
 
