@@ -1,48 +1,210 @@
-# Segmentation Project
+# ScanStudio
 
-This project is focused on processing and segmenting OCR (Optical Character Recognition) data. It includes tools and scripts to parse OCR outputs and prepare them for further analysis or processing.
+A fully automated pipeline for converting book scanning videos into high-quality PDFs. Place your videos in the `Videos/` directory, run `make`, and get PDFs of individual book pages.
 
-## Features
+## Overview
 
-- Extract text from videos of documents.
-- Parse raw OCR outputs into structured formats.
-- Clean and preprocess OCR data for downstream AI/ML.
-- Export video scans to PDF.
+ScanStudio processes book scanning videos through multiple stages:
+1. **Frame Extraction** - Extracts all frames from video files
+2. **Keyframe Detection** - Identifies unique pages (removes duplicates)
+3. **Page Cropping** - Splits two-page spreads into left and right pages
+4. **PDF Generation** - Creates a final PDF from the cropped pages
 
-## Parsing text from videos
+## Prerequisites
 
-The `make parse_OCR` target is designed to parse OCR data and extract meaningful information. This target automates the process of handling raw OCR outputs, cleaning the data, and organizing it into a structured format.
+- Python 3.x
+- ImageMagick (for PDF generation)
+- FFmpeg (for video processing)
+- Required Python packages (see [Installation](#installation))
 
-Put your videos in `Videos/` before continuing. These are videos of flipping pages of documents. The OCR will be run on these videos, and the output will be saved in the `test_frames/` directory.
+## Installation
 
-### Usage
+Install Python dependencies:
 
-Once the videos are in the appropriate directory, simply execute the following command (from the main project directory):
 ```bash
-make parse_OCR
+make install
 ```
 
-### Example: Parsing OCR data from a sample video
+This will install all packages from `requirements.txt`.
 
-To parse OCR data from a sample video, follow these steps:
+## Directory Structure
 
-1. Place your video file in the `Videos/` directory (e.g., `sample_video.mov`).
-2. Run the following command from the main project directory:
-    ```bash
-    make parse_OCR
-    ```
-3. The output will be saved in the `test_frames/` directory.
-4. Check the structured output in `test_frames/sample_video.mov/`.
+```
+scanstudio/
+├── Videos/              # Place your .mp4 or .mov video files here
+├── test_frames/         # Output directory (auto-generated)
+│   └── <book_name>/
+│       ├── *.jpg        # Extracted frames
+│       ├── keyframes/   # Deduplicated keyframes
+│       ├── left/        # Left page crops
+│       ├── right/       # Right page crops
+│       └── cropped/     # Staged pages for PDF
+├── frameextraction.py
+├── keyframe_extraction.py
+├── batch_image_cropper.py
+├── streamlit_keyframes.py
+└── Makefile
+```
 
-## Contributing
+## Quick Start
 
-Contributions are welcome! Please follow these steps:
+1. Place your book scanning videos in the `Videos/` directory
+2. Run the default pipeline:
+   ```bash
+   make
+   ```
+3. Find processed keyframes in `test_frames/<book_name>/keyframes/`
 
-1. Fork the repository.
-2. Create a new branch for your feature or bugfix.
-3. Commit your changes and push the branch.
-4. Submit a pull request.
+## Usage
 
+### Basic Commands
+
+| Command | Description |
+|---------|-------------|
+| `make` | Run the default pipeline (extracts frames and keyframes) |
+| `make frames` | Extract frames from all videos |
+| `make keyframes` | Extract keyframes (deduplicated pages) |
+| `make left-pages` | Crop left pages from keyframes |
+| `make right-pages` | Crop right pages from keyframes |
+| `make cropped` | Stage all cropped pages |
+| `make pdfs` | Generate PDFs for all books |
+| `make <book>.pdf` | Generate PDF for a specific book |
+
+### Processing Individual Books
+
+To process a specific book:
+
+```bash
+make my_book.pdf
+```
+
+Replace `my_book` with your video filename (without extension).
+
+
+### Utility Commands
+
+| Command | Description |
+|---------|-------------|
+| `make install` | Install Python dependencies |
+| `make clean` | Remove all generated files and PDFs |
+| `make print-BOOKS` | List all discovered books |
+| `make print-VIDEOS` | List all discovered videos |
+
+
+## Pipeline Details
+
+### 1. Frame Extraction
+
+```bash
+make frames
+```
+
+- Processes all `.mp4` and `.mov` files in `Videos/`
+- Outputs frames as `.jpg` files to `test_frames/<book_name>/`
+- Uses `frameextraction.py`
+
+### 2. Keyframe Detection
+
+```bash
+make keyframes
+```
+
+- Analyzes extracted frames to identify unique pages
+- Removes duplicate/similar frames (e.g., when camera is idle)
+- Outputs to `test_frames/<book_name>/keyframes/`
+- Uses `keyframe_extraction.py`
+
+### 3. Page Cropping
+
+```bash
+make left-pages
+make right-pages
+```
+
+- Splits two-page spreads into individual pages
+- Left pages go to `test_frames/<book_name>/left/`
+- Right pages go to `test_frames/<book_name>/right/`
+- Uses `batch_image_cropper.py`
+
+### 4. Page Staging
+
+```bash
+make cropped
+```
+
+- Moves all left and right pages into `cropped/` directory
+- Prepares images for PDF generation
+- **Note:** This moves (not copies) files from left/right directories
+
+### 5. PDF Generation
+
+```bash
+make pdfs              # Generate all PDFs
+make my_book.pdf       # Generate specific PDF
+```
+
+- Combines all cropped pages into a single PDF
+- Resizes images to max width of 512px (maintains aspect ratio)
+- Uses 95% JPEG quality with progressive encoding
+- Output: `<book_name>.pdf` in the project root
+
+## Configuration
+
+Key variables in the Makefile:
+
+```makefile
+VIDEO_DIR   := Videos        # Input video directory
+OUTPUT_DIR  := test_frames   # Output directory for frames
+```
+
+To change these, edit the Makefile or override when calling make:
+
+```bash
+make VIDEO_DIR=my_videos OUTPUT_DIR=output frames
+```
+
+## Dependencies
+
+The pipeline uses the following Python scripts:
+
+- **frameextraction.py** - Extracts frames from video files
+- **keyframe_extraction.py** - Detects unique keyframes
+- **batch_image_cropper.py** - Crops left/right pages from spreads
+- **streamlit_keyframes.py** - Interactive viewer for keyframes
+
+## Model Weights
+
+The pipeline may download SAM (Segment Anything Model) weights if needed:
+
+```bash
+../sam_vit_h_4b8939.pth
+```
+
+This will be automatically downloaded from Facebook AI Research if required.
+
+## Troubleshooting
+
+### No frames extracted
+- Verify video files are in `Videos/` directory
+- Check video format (must be `.mp4` or `.mov`)
+- Ensure FFmpeg is installed
+
+### No keyframes detected
+- Verify frames were extracted successfully
+- Check `test_frames/<book_name>/` for `.jpg` files
+
+### PDF generation fails
+- Ensure ImageMagick is installed: `magick --version`
+- Verify cropped images exist in `test_frames/<book_name>/cropped/`
+
+### Debugging
+
+Print internal make variables:
+
+```bash
+make print-BOOKS       # List all discovered books
+make print-VIDEOS      # List all video files
+make print-FRAMES_STAMPS  # Show frame stamp targets
+```
 ## License
-
-This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
+Apache 2.0 License
