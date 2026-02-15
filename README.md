@@ -1,10 +1,10 @@
-# ScanStudio
+# Scan Studio
 
-A fully automated pipeline for converting book scanning videos into high-quality PDFs. Place your videos in the `Videos/` directory, run `make`, and get PDFs of individual book pages.
+A data preparation pipeline for converting book scanning videos into high-quality PDFs. Place your videos in the `Videos/` directory, run `make`, and get PDFs of individual book pages.
 
 ## Overview
 
-ScanStudio processes book scanning videos through multiple stages:
+Scan Studio processes book scanning videos through multiple stages:
 1. **Frame Extraction** - Extracts all frames from video files
 2. **Keyframe Detection** - Identifies unique pages (removes duplicates)
 3. **Page Cropping** - Splits two-page spreads into left and right pages
@@ -64,21 +64,25 @@ scanstudio/
 | `make` | Run the default pipeline (extracts frames and keyframes) |
 | `make frames` | Extract frames from all videos |
 | `make keyframes` | Extract keyframes (deduplicated pages) |
-| `make left-pages` | Crop left pages from keyframes |
-| `make right-pages` | Crop right pages from keyframes |
-| `make cropped` | Stage all cropped pages |
-| `make pdfs` | Generate PDFs for all books |
-| `make <book>.pdf` | Generate PDF for a specific book |
+| `make frames-one BOOK="..."` | Extract frames for a single book (video stem) |
+| `make keyframes-one BOOK="..."` | Extract keyframes for a single book |
+| `make left BOOK="..."` | Crop left pages for a single book (interactive) |
+| `make right BOOK="..."` | Crop right pages for a single book (interactive) |
+| `make cropped BOOK="..."` | Stage cropped pages for a single book |
+| `make pdf BOOK="..."` | Generate a PDF for a single book |
 
 ### Processing Individual Books
 
-To process a specific book:
+To process a specific book (including names with spaces), pass it via `BOOK`:
 
 ```bash
-make my_book.pdf
+make frames-one BOOK="African Founders"
+make keyframes-one BOOK="African Founders"
+make left BOOK="African Founders"
+make right BOOK="African Founders"
+make cropped BOOK="African Founders"
+make pdf BOOK="African Founders"
 ```
-
-Replace `my_book` with your video filename (without extension).
 
 
 ### Utility Commands
@@ -87,8 +91,8 @@ Replace `my_book` with your video filename (without extension).
 |---------|-------------|
 | `make install` | Install Python dependencies |
 | `make clean` | Remove all generated files and PDFs |
-| `make print-BOOKS` | List all discovered books |
-| `make print-VIDEOS` | List all discovered videos |
+| `make list-books` | List discovered book names (video stems) |
+| `make list-videos` | List discovered video files |
 
 
 ## Pipeline Details
@@ -117,8 +121,8 @@ make keyframes
 ### 3. Page Cropping
 
 ```bash
-make left-pages
-make right-pages
+make left BOOK="<book_name>"
+make right BOOK="<book_name>"
 ```
 
 - Splits two-page spreads into individual pages
@@ -129,7 +133,7 @@ make right-pages
 ### 4. Page Staging
 
 ```bash
-make cropped
+make cropped BOOK="<book_name>"
 ```
 
 - Moves all left and right pages into `cropped/` directory
@@ -139,8 +143,7 @@ make cropped
 ### 5. PDF Generation
 
 ```bash
-make pdfs              # Generate all PDFs
-make my_book.pdf       # Generate specific PDF
+make pdf BOOK="<book_name>"
 ```
 
 - Combines all cropped pages into a single PDF
@@ -202,9 +205,8 @@ This will be automatically downloaded from Facebook AI Research if required.
 Print internal make variables:
 
 ```bash
-make print-BOOKS       # List all discovered books
-make print-VIDEOS      # List all video files
-make print-FRAMES_STAMPS  # Show frame stamp targets
+make list-books        # List discovered book names (video stems)
+make list-videos       # List discovered video files
 ```
 ## License
 Apache 2.0 License
