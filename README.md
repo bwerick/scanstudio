@@ -90,7 +90,7 @@ I've had the best experience with Mac Finder for this step, but any file explore
 
 ![Keyframe Review](image.png)
 
-When you have every page of the book in the `keyframes/` directory, clearly legible, and without duplicate pages, you can proceed.
+When you have every page of the book in the `test_frames/<book_name>/keyframes/` directory, clearly legible, and without duplicate pages, you can proceed.
 
 To crop and stitch, pass the name of the book (including whitespaces, no file extension) via the `BOOK` variable:
 
