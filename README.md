@@ -76,17 +76,21 @@ scanstudio/
 
 ### Processing Individual Books
 
-To process a specific book (including names with spaces), pass it via `BOOK`:
+To process a specific book, first run the frame and keyframe extraction:
 
 ```bash
 make 
 ```
 
-Check the contents of `test_frames/<book_name>/keyframes/` to review the extracted keyframes. You can manually remove unwanted frames or add missing frames to this directory before proceeding. I've had the best experience with Mac Finder for this step, but any file explorer will work.
+Check the contents of `test_frames/<book_name>/keyframes/` to review the extracted keyframes. You can: 
+1. manually remove unwanted frames from this directory. 
+2. add missing frames from `test_frames/<book_name>/` to this directory.
+
+I've had the best experience with Mac Finder for this step, but any file explorer will work.
 
 ![Keyframe Review](image.png)
 
-Then, crop left and right pages:
+Then pass the name of the book (including whitespaces, no file extension) via `BOOK` to crop left and right pages:
 
 ```
 make left BOOK="African Founders"
