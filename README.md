@@ -1,13 +1,17 @@
 # Scan Studio
 
-A data preparation pipeline for converting book scanning videos into high-quality PDFs. Place your videos in the `Videos/` directory, run `make`, and get PDFs of individual book pages.
+A data preparation pipeline for converting book scanning videos into high-quality PDFs. Place your videos in the `Videos/` directory, run `make`, and get a PDF of the book pages.
+
+For downstream text extraction and dataframe queries from the generated PDFs, use the supporting [Document Parser](https://github.com/rlnsanz/document_parser).
 
 ## Overview
 
 Scan Studio processes book scanning videos through multiple stages:
 1. **Frame Extraction** - Extracts all frames from video files
 2. **Keyframe Detection** - Identifies unique pages (removes duplicates)
+   - Involves manual review to remove unwanted frames and add missing frames (to be further automated).
 3. **Page Cropping** - Splits two-page spreads into left and right pages
+   - Uses an interactive GUI for cropping (to be fully automated).
 4. **PDF Generation** - Creates a final PDF from the cropped pages
 
 ## Prerequisites
@@ -42,17 +46,18 @@ scanstudio/
 ├── frameextraction.py
 ├── keyframe_extraction.py
 ├── batch_image_cropper.py
-├── streamlit_keyframes.py
 └── Makefile
 ```
 
 ## Quick Start
 
 1. Place your book scanning videos in the `Videos/` directory
+
 2. Run the default pipeline:
    ```bash
    make
    ```
+
 3. Find processed keyframes in `test_frames/<book_name>/keyframes/`
 
 ## Usage
@@ -64,8 +69,6 @@ scanstudio/
 | `make` | Run the default pipeline (extracts frames and keyframes) |
 | `make frames` | Extract frames from all videos |
 | `make keyframes` | Extract keyframes (deduplicated pages) |
-| `make frames-one BOOK="..."` | Extract frames for a single book (video stem) |
-| `make keyframes-one BOOK="..."` | Extract keyframes for a single book |
 | `make left BOOK="..."` | Crop left pages for a single book (interactive) |
 | `make right BOOK="..."` | Crop right pages for a single book (interactive) |
 | `make cropped BOOK="..."` | Stage cropped pages for a single book |
@@ -76,8 +79,16 @@ scanstudio/
 To process a specific book (including names with spaces), pass it via `BOOK`:
 
 ```bash
-make frames-one BOOK="African Founders"
-make keyframes-one BOOK="African Founders"
+make 
+```
+
+Check the contents of `test_frames/<book_name>/keyframes/` to review the extracted keyframes. You can manually remove unwanted frames or add missing frames to this directory before proceeding. I've had the best experience with Mac Finder for this step, but any file explorer will work.
+
+![Keyframe Review](image.png)
+
+Then, crop left and right pages:
+
+```
 make left BOOK="African Founders"
 make right BOOK="African Founders"
 make cropped BOOK="African Founders"
