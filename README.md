@@ -90,7 +90,9 @@ I've had the best experience with Mac Finder for this step, but any file explore
 
 ![Keyframe Review](image.png)
 
-Then pass the name of the book (including whitespaces, no file extension) via `BOOK` to crop left and right pages:
+When you have every page of the book in the `keyframes/` directory, clearly legible, and without duplicate pages, you can proceed.
+
+To crop and stitch, pass the name of the book (including whitespaces, no file extension) via the `BOOK` variable:
 
 ```
 make left BOOK="African Founders"
