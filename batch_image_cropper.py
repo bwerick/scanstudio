@@ -20,25 +20,81 @@ def select_crop_box(image):
     return r
 
 
-def crop_images(image_generator, crop_box):
-    """Crop all images using the initial crop box, with the option to adjust."""
+# Arrow key codes vary by OS/backend and whether you use waitKey vs waitKeyEx.
+# We support the common values across macOS, Linux (X11), and Windows.
+_ARROW_KEYS = {
+    # macOS (Cocoa)
+    63232: (0, -1),  # Up
+    63233: (0, 1),  # Down
+    63234: (-1, 0),  # Left
+    63235: (1, 0),  # Right
+    # Linux (X11)
+    65361: (-1, 0),  # Left
+    65362: (0, -1),  # Up
+    65363: (1, 0),  # Right
+    65364: (0, 1),  # Down
+    # Windows (typically from waitKeyEx)
+    2424832: (-1, 0),  # Left
+    2490368: (0, -1),  # Up
+    2555904: (1, 0),  # Right
+    2621440: (0, 1),  # Down
+    # Some OpenCV builds return these when masking with & 0xFF
+    81: (-1, 0),  # Left
+    82: (0, -1),  # Up
+    83: (1, 0),  # Right
+    84: (0, 1),  # Down
+}
+
+_WINDOW = "Arrows: move | +/-: step size | 'a': reset box | 's': confirm | 'q': quit"
+
+
+def _show_box(img, x, y, w, h, step):
+    """Draw the crop box overlay and refresh the window immediately."""
+    overlay = img.copy()
+    cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 255, 0), 2)
+    cv2.putText(
+        overlay,
+        f"step={step}px  pos=({x},{y})",
+        (8, 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 0),
+        2,
+    )
+    cv2.imshow(_WINDOW, overlay)
+
+
+def crop_images(image_generator, crop_box, step=10):
+    """Crop all images using the initial crop box, with the option to nudge it."""
     cropped_images = []
     x, y, w, h = crop_box
 
-    for i, (filename, img) in enumerate(image_generator):
-        while True:  # Loop until the user confirms or adjusts the crop box
-            print(f"Processing {filename}...")
-            img_copy = img.copy()
-            cv2.rectangle(img_copy, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cv2.imshow(
-                "Verify Crop Box (Press 'a' to adjust, 's' to confirm, 'q' to quit)",
-                img_copy,
-            )
-            key = cv2.waitKey(0)
+    for filename, img in image_generator:
+        print(f"Processing {filename}...")
+        img_h, img_w = img.shape[:2]
+        _show_box(img, x, y, w, h, step)
 
-            if key == ord("a"):  # Adjust crop box
+        while True:
+            # waitKeyEx is required on many systems (notably macOS) to receive
+            # special keys like arrows. Fall back to waitKey if not available.
+            wait_fn = getattr(cv2, "waitKeyEx", cv2.waitKey)
+            key = wait_fn(0)
+
+            if key in _ARROW_KEYS:
+                dx, dy = _ARROW_KEYS[key]
+                x = max(0, min(img_w - w, x + dx * step))
+                y = max(0, min(img_h - h, y + dy * step))
+                _show_box(img, x, y, w, h, step)
+            elif key == ord("+") or key == ord("="):
+                step = min(step + 5, 100)
+                _show_box(img, x, y, w, h, step)
+            elif key == ord("-"):
+                step = max(step - 5, 1)
+                _show_box(img, x, y, w, h, step)
+            elif key == ord("a"):  # Full reset via selectROI
                 x, y, w, h = select_crop_box(img)
-            elif key == ord("s"):  # Confirm crop box
+                _show_box(img, x, y, w, h, step)
+            elif key == ord("s"):  # Confirm
                 break
             elif key == ord("q"):  # Quit
                 cv2.destroyAllWindows()

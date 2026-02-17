@@ -101,6 +101,9 @@ make cropped BOOK="African Founders"
 make pdf BOOK="African Founders"
 ```
 
+![Snapshot of Mac Preview of output PDF](image-1.png)
+
+*Ta-da!* You should now have a PDF of the book pages in the project root directory.
 
 ### Utility Commands
 

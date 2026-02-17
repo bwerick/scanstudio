@@ -232,12 +232,13 @@ pdf: guard-book
 		$(MAKE) cropped BOOK="$(BOOK)"; \
 	fi; \
 	out="$(BOOK).pdf"; \
+	out_abs="$(CURDIR)/$$out"; \
 	echo "Building $$out from $(OUTPUT_DIR)/$(BOOK)/cropped/"; \
 	cd "$(OUTPUT_DIR)/$(BOOK)/cropped"; \
 	shopt -s nullglob; \
 	images=( *.jpg *.png ); \
 	[ "$${#images[@]}" -gt 0 ] || { echo "ERROR: no images in $(OUTPUT_DIR)/$(BOOK)/cropped/"; exit 1; }; \
-	magick "$${images[@]}" -resize '512x>' -quality 95 -interlace Plane "$(abspath $(BOOK).pdf)"
+	magick "$${images[@]}" -resize '512x>' -quality 95 -interlace Plane "$$out_abs"
 
 # ----------------------------
 # Streamlit helper
