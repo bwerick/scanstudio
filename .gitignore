@@ -1,5 +1,10 @@
 .claude/
 downscaled/
+keyframeselection/
+frames_720p/
+recordings/
+scripts/
+output/
 cropped_pages/
 left_pages/
 right_pages/
@@ -211,3 +216,40 @@ Makefile
 
 # ignore pdf files
 *.pdf
+
+
+# Video recordings (too large for git)
+recordings/*.mp4
+recordings/*.mov
+
+# Pipeline outputs
+output/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+notebooks/
+
+camera_probe_results.json
+cluster_pages_from_video.py
+extract_spreads_by_motion.py
+frame_labeler.py
+ncc_diagnostic.py
+probe_cam0.py
+
+probe_camera.py
+
+record_test_4k.py
+video_book_scanner.py
+whuch_cam.py
+record_book.py
