@@ -4,160 +4,99 @@
 #   make all VIDEO=recordings/mybook.mp4
 #   make review VIDEO=recordings/mybook.mp4
 #   make pdf VIDEO=recordings/mybook.mp4
-#   make bw VIDEO=recordings/mybook.mp4
-#   make clean VIDEO=recordings/mybook.mp4
-#
-# The VIDEO argument is required for all targets.
-# The output directory is derived from the video filename:
-#   recordings/mybook.mp4 → output/mybook/
 
-# ── Check VIDEO argument ──────────────────────────────────────
 ifndef VIDEO
 $(error VIDEO is required. Usage: make all VIDEO=recordings/mybook.mp4)
 endif
 
-# ── Derived paths ─────────────────────────────────────────────
 NAME     := $(basename $(notdir $(VIDEO)))
 OUTDIR   := output/$(NAME)
 SCRIPTS  := scripts
 
-# ── Phase output markers ──────────────────────────────────────
-MOTION    := $(OUTDIR)/motion/motion_signal.npy
-PEAKS     := $(OUTDIR)/peaks/peaks.npy
-KEYFRAMES := $(OUTDIR)/keyframes/keyframes.json
-REVIEW    := $(OUTDIR)/review/final_keyframes.json
-PAGES     := $(OUTDIR)/pages/pages.json
-BW        := $(OUTDIR)/bw/bw_metadata.json
+# Phase output markers (new directory structure)
+MOTION    := $(OUTDIR)/data/motion_signal.npy
+PEAKS     := $(OUTDIR)/data/peaks.npy
+KEYFRAMES := $(OUTDIR)/json/keyframes.json
+PAGES     := $(OUTDIR)/json/pages.json
+BW_META   := $(OUTDIR)/json/bw_metadata.json
 PDF       := $(OUTDIR)/pdf/book.pdf
 PDF_BW    := $(OUTDIR)/pdf/book_bw.pdf
 
-# ── Default parameters (override on command line) ─────────────
+# Default parameters
 SAFETY_MARGIN ?= 0.005
 BLOCK_SIZE    ?= 51
 BW_OFFSET     ?= 10
-JPEG_QUALITY  ?= 92
+MODE          ?= double
 
-# ══════════════════════════════════════════════════════════════
-# Targets
-# ══════════════════════════════════════════════════════════════
-
-.PHONY: all bw motion peaks keyframes review rereview split page-review binarize pdf pdf-bw clean help
+.PHONY: all bw motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean help
 
 help:
 	@echo "ScanStudio Pipeline"
 	@echo ""
 	@echo "Usage: make <target> VIDEO=recordings/mybook.mp4"
 	@echo ""
-	@echo "Full pipeline:"
-	@echo "  all           Run full pipeline (pauses at review steps)"
-	@echo "  bw            Binarize pages and build B&W PDF"
+	@echo "  all           Full pipeline (pauses at review)"
+	@echo "  bw            Binarize + B&W PDF"
 	@echo ""
-	@echo "Individual phases:"
-	@echo "  motion        Phase 1: Compute motion signal"
-	@echo "  peaks         Phase 2: Detect page turn peaks"
-	@echo "  keyframes     Phase 3: Select keyframes"
-	@echo "  review        Phase 4: Review keyframes (GUI)"
-	@echo "  rereview      Phase 5: Re-review keyframes (GUI)"
-	@echo "  split         Phase 6: Split spreads into pages"
-	@echo "  page-review   Phase 7: Review page quality (GUI)"
-	@echo "  binarize      Phase 8: Binarize pages to B&W"
-	@echo "  pdf           Phase 9: Build PDF from color pages"
-	@echo "  pdf-bw        Phase 9: Build PDF from B&W pages"
+	@echo "  motion        P1: Motion signal"
+	@echo "  peaks         P2: Detect peaks"
+	@echo "  keyframes     P3: Select keyframes"
+	@echo "  review        P4: Review keyframes (GUI, reentrant)"
+	@echo "  crop          P5: Crop keyframes"
+	@echo "  split         P6: Split into pages"
+	@echo "  page-review   P7: Page quality review (GUI)"
+	@echo "  binarize      P8: Binarize to B&W"
+	@echo "  pdf           P9: Build PDF"
+	@echo "  pdf-bw        P9: Build B&W PDF"
 	@echo ""
-	@echo "Utilities:"
-	@echo "  clean         Delete all outputs for this video"
-	@echo "  help          Show this message"
+	@echo "  clean         Delete all outputs"
 	@echo ""
-	@echo "Parameters (override with VAR=value):"
-	@echo "  SAFETY_MARGIN  Crop safety margin (default: $(SAFETY_MARGIN))"
-	@echo "  BLOCK_SIZE     Binarize block size (default: $(BLOCK_SIZE))"
-	@echo "  BW_OFFSET      Binarize offset (default: $(BW_OFFSET))"
-	@echo "  JPEG_QUALITY   JPEG quality (default: $(JPEG_QUALITY))"
-	@echo ""
-	@echo "Current video: $(VIDEO)"
-	@echo "Output dir:    $(OUTDIR)"
+	@echo "  SAFETY_MARGIN=$(SAFETY_MARGIN)  BLOCK_SIZE=$(BLOCK_SIZE)  BW_OFFSET=$(BW_OFFSET)"
+	@echo "  MODE=$(MODE)  (double=book spreads, single=loose docs)"
 
-# ── Full pipeline ─────────────────────────────────────────────
-
-all: motion peaks keyframes review split page-review pdf
-	@echo ""
-	@echo "════════════════════════════════════════════════════"
-	@echo "  Pipeline complete: $(PDF)"
-	@echo "════════════════════════════════════════════════════"
+all: motion peaks keyframes review crop split page-review pdf
+	@echo "Pipeline complete: $(PDF)"
 
 bw: binarize pdf-bw
-	@echo ""
-	@echo "════════════════════════════════════════════════════"
-	@echo "  B&W pipeline complete: $(PDF_BW)"
-	@echo "════════════════════════════════════════════════════"
-
-# ── Phase 1: Motion signal ────────────────────────────────────
+	@echo "B&W pipeline complete: $(PDF_BW)"
 
 motion: $(MOTION)
-
 $(MOTION):
 	python $(SCRIPTS)/p1_motion_signal.py $(VIDEO)
 
-# ── Phase 2: Detect peaks ─────────────────────────────────────
-
 peaks: $(PEAKS)
-
 $(PEAKS): $(MOTION)
 	python $(SCRIPTS)/p2_detect_peaks.py $(OUTDIR)
 
-# ── Phase 3: Select keyframes ─────────────────────────────────
-
 keyframes: $(KEYFRAMES)
-
 $(KEYFRAMES): $(PEAKS)
 	python $(SCRIPTS)/p3_select_keyframes.py $(OUTDIR) $(VIDEO)
 
-# ── Phase 4: Review keyframes (interactive) ───────────────────
-
-review: $(REVIEW)
-
-$(REVIEW): $(KEYFRAMES)
+review: $(KEYFRAMES)
 	python $(SCRIPTS)/p4_review_keyframes.py $(OUTDIR) $(VIDEO)
 
-# ── Phase 5: Re-review ────────────────────────────────────────
-
-rereview:
-	python $(SCRIPTS)/p5_prep_rereview.py $(OUTDIR) $(VIDEO)
-
-# ── Phase 6: Split pages ──────────────────────────────────────
+crop: $(KEYFRAMES)
+	python $(SCRIPTS)/p5_crop.py $(OUTDIR) --mode $(MODE) --safety-margin $(SAFETY_MARGIN)
 
 split: $(PAGES)
-
-$(PAGES): $(REVIEW)
-	python $(SCRIPTS)/p6_split_pages.py $(OUTDIR) --safety-margin $(SAFETY_MARGIN)
-
-# ── Phase 7: Page quality review (interactive) ────────────────
+$(PAGES): $(KEYFRAMES)
+	python $(SCRIPTS)/p6_split_pages.py $(OUTDIR) --mode $(MODE)
 
 page-review: $(PAGES)
 	python $(SCRIPTS)/p7_review_pages.py $(OUTDIR)
 
-# ── Phase 8: Binarize ─────────────────────────────────────────
-
-binarize: $(BW)
-
-$(BW): $(PAGES)
+binarize: $(BW_META)
+$(BW_META): $(PAGES)
 	python $(SCRIPTS)/p8_binarize.py $(OUTDIR) --block-size $(BLOCK_SIZE) --offset $(BW_OFFSET)
 
-# ── Phase 9: Build PDF ────────────────────────────────────────
-
 pdf: $(PDF)
-
 $(PDF): $(PAGES)
 	python $(SCRIPTS)/p9_build_pdf.py $(OUTDIR)
 
 pdf-bw: $(PDF_BW)
-
-$(PDF_BW): $(BW)
+$(PDF_BW): $(BW_META)
 	python $(SCRIPTS)/p9_build_pdf.py $(OUTDIR) --source bw --pdf-name book_bw.pdf
-
-# ── Clean ─────────────────────────────────────────────────────
 
 clean:
 	@echo "Removing $(OUTDIR)/"
 	rm -rf $(OUTDIR)
-	@echo "Done."
