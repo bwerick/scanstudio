@@ -5,7 +5,7 @@
 #   make review VIDEO=recordings/mybook.mp4
 #   make pdf VIDEO=recordings/mybook.mp4
 
-ifeq ($(filter install help,$(MAKECMDGOALS)),)
+ifeq ($(filter install help live,$(MAKECMDGOALS)),)
 ifndef VIDEO
 $(error VIDEO is required. Usage: make all VIDEO=recordings/mybook.mp4)
 endif
@@ -29,8 +29,12 @@ SAFETY_MARGIN ?= 0.005
 BLOCK_SIZE    ?= 51
 BW_OFFSET     ?= 10
 MODE          ?= double
+CAMERA        ?= 0
+SETTLE        ?= 2.0
+TURN          ?= 5.0
+SETTLE_TIME   ?= 0.4
 
-.PHONY: all bw motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install help
+.PHONY: all bw live finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install help
 
 help:
 	@echo "ScanStudio Pipeline"
@@ -39,6 +43,8 @@ help:
 	@echo ""
 	@echo "  all           Full pipeline (pauses at review)"
 	@echo "  bw            Binarize + B&W PDF"
+	@echo "  live          P0: Live webcam capture (make live NAME=mybook)"
+	@echo "  finish        P4-P9 back half (run after 'live')"
 	@echo ""
 	@echo "  motion        P1: Motion signal"
 	@echo "  peaks         P2: Detect peaks"
@@ -55,9 +61,29 @@ help:
 	@echo ""
 	@echo "  SAFETY_MARGIN=$(SAFETY_MARGIN)  BLOCK_SIZE=$(BLOCK_SIZE)  BW_OFFSET=$(BW_OFFSET)"
 	@echo "  MODE=$(MODE)  (double=book spreads, single=loose docs)"
+	@echo "  live: CAMERA=$(CAMERA)  SETTLE=$(SETTLE)  TURN=$(TURN)  SETTLE_TIME=$(SETTLE_TIME)"
 
-all: motion peaks keyframes review crop split page-review pdf
+all: motion peaks keyframes finish
 	@echo "Pipeline complete: $(PDF)"
+
+# Back half (P4-P9): review, crop, split, page-review, build PDF.
+# Use after 'live' (or run individually). Pauses at P4 and P7.
+finish: review crop split page-review pdf
+	@echo "Pipeline complete: $(PDF)"
+
+# Live capture (P0): record the webcam and auto-select keyframes in real time.
+# Replaces P1-P3; produces the recording + the same artifacts they would.
+#   make live NAME=mybook [CAMERA=1]
+#   make finish VIDEO=recordings/mybook.mp4
+live:
+ifndef NAME
+	$(error NAME is required. Usage: make live NAME=mybook)
+endif
+	@mkdir -p recordings
+	python $(SCRIPTS)/p0_live_capture.py output/$(NAME) recordings/$(NAME).mp4 \
+		--camera $(CAMERA) --settle-threshold $(SETTLE) --turn-threshold $(TURN) \
+		--settle-time $(SETTLE_TIME)
+	@echo "Live capture done. Continue with: make finish VIDEO=recordings/$(NAME).mp4"
 
 bw: binarize pdf-bw
 	@echo "B&W pipeline complete: $(PDF_BW)"

@@ -1,24 +1,40 @@
 # Scan Studio
 
-A data preparation pipeline for converting book scanning videos into high-quality PDFs. Point it at a video of you scanning a book, run `make all`, and get a PDF of every page.
+A data preparation pipeline for converting book scanning videos into high-quality PDFs. Scan a book one of two ways:
+
+- **Live capture** — point your webcam at the book like a robot head, run `make live`, and it records and selects a keyframe for each spread in real time as you turn pages.
+- **From a recording** — already have a video of you scanning? Run `make all` and get a PDF of every page.
+
+Both paths converge on the same review → crop → split → PDF back half.
 
 For downstream text extraction and dataframe queries from generated PDFs, use the supporting [Document Parser](https://github.com/rlnsanz/document_parser).
 
 ## Quick Start
+
+Live capture (webcam):
+
+```bash
+make install
+make live NAME=mybook
+make finish VIDEO=recordings/mybook.mp4
+```
+
+From an existing recording:
 
 ```bash
 make install
 make all VIDEO=recordings/mybook.mp4
 ```
 
-The pipeline pauses twice for interactive review (P4 and P7). After `make all` completes, the PDF is at `output/mybook/pdf/book.pdf`.
+Either way, the pipeline pauses twice for interactive review (P4 and P7), and the finished PDF lands at `output/mybook/pdf/book.pdf`.
 
 ## Overview
 
-Scan Studio processes a single video file through nine numbered phases:
+A scan flows through numbered phases. The front end produces a recording plus keyframe images and metadata; the back half (P4–P9) reviews, crops, splits, and assembles the PDF. **P0 (live capture) is an alternative front end to P1–P3** — it produces the exact same artifacts in real time, so everything downstream is identical regardless of which path you use.
 
 | Phase | Name | Type |
 |-------|------|------|
+| P0 | Live Capture | **Interactive** (alternative to P1–P3) |
 | P1 | Motion Signal | Automated |
 | P2 | Detect Peaks | Automated |
 | P3 | Select Keyframes | Automated |
@@ -81,10 +97,12 @@ output/<name>/
 
 ## Commands
 
-Every target requires `VIDEO=path/to/file.mp4`.
+Most targets require `VIDEO=path/to/file.mp4`. The exception is `make live`, which takes `NAME=` instead (the recording doesn't exist yet) and creates `recordings/<NAME>.mp4`.
 
 | Command | Description |
 |---------|-------------|
+| `make live NAME=...` | P0: Live webcam capture — records + selects keyframes, then run `make finish VIDEO=recordings/<NAME>.mp4` |
+| `make finish VIDEO=...` | Back half (P4–P9): review, crop, split, page-review, PDF — run after `make live` |
 | `make all VIDEO=...` | Full pipeline — runs P1–P7 and P9, pauses at P4 and P7 |
 | `make bw VIDEO=...` | Binarize + B&W PDF (run after `make all`) |
 | `make motion VIDEO=...` | P1: Compute motion signal |
@@ -102,6 +120,34 @@ Every target requires `VIDEO=path/to/file.mp4`.
 | `make help VIDEO=...` | Show all targets and parameters |
 
 ## Pipeline Details
+
+### P0 — Live Capture (interactive)
+
+```bash
+make live NAME=mybook
+make live NAME=mybook CAMERA=1 SETTLE=1.5 TURN=4.0
+```
+
+Opens a live webcam window and uses it like a robot head: it records the feed to `recordings/<NAME>.mp4` while an online state machine watches motion and **auto-captures the sharpest frame each time the book settles after a page turn**. The on-screen overlay shows a live motion bar with the settle/turn thresholds marked, the current state (`WAITING` / `SETTLED` / `TURNING`), and a running capture count.
+
+This replaces P1–P3: on quit it writes the recording plus `images/`, `json/keyframes.json`, `json/metadata.json`, and the signal arrays in `data/` — the same artifacts P1–P3 produce. Continue straight into review:
+
+```bash
+make finish VIDEO=recordings/mybook.mp4
+```
+
+**Keys:**
+
+| Key | Action |
+|-----|--------|
+| `Q` / `Esc` | Quit and save |
+| `U` | Undo last capture |
+| `C` | Force-capture the current frame now |
+| `Space` | Pause / resume auto-capture |
+
+**Tuning:** webcam motion magnitudes differ from pre-recorded clips, so you may need to adjust the thresholds (see Configuration). Watch the motion bar relative to the threshold ticks: if turns aren't detected, lower `TURN`; if it captures while you're still moving, raise `SETTLE` or `SETTLE_TIME`.
+
+> **macOS Continuity Camera:** for real scan resolution, use an iPhone as the webcam rather than the built-in laptop camera, and mount it on a fixed stand so framing stays stable across the session.
 
 ### P1 — Motion Signal
 
@@ -215,11 +261,16 @@ make all VIDEO=recordings/mybook.mp4 MODE=single SAFETY_MARGIN=0.01
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `VIDEO` | *(required)* | Path to input video file |
+| `VIDEO` | *(required)* | Path to input video file (all targets except `live`) |
+| `NAME` | *(required for `live`)* | Project name; `make live` records to `recordings/<NAME>.mp4` |
 | `MODE` | `double` | `double` for book spreads, `single` for loose documents |
 | `SAFETY_MARGIN` | `0.005` | Crop safety margin as a fraction of image dimension |
 | `BLOCK_SIZE` | `51` | Adaptive threshold block size for binarization (must be odd) |
 | `BW_OFFSET` | `10` | Threshold offset for binarization |
+| `CAMERA` | `0` | Webcam index for `make live` |
+| `SETTLE` | `2.0` | Live: motion below this counts as "still" (book settled) |
+| `TURN` | `5.0` | Live: motion above this counts as a page turn in progress |
+| `SETTLE_TIME` | `0.4` | Live: seconds of stillness required before a capture fires |
 
 ## Example Walkthrough
 

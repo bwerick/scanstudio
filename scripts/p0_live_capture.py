@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""
+Phase 0: Live Capture (webcam)
+
+Real-time alternative to P1-P3. Records the webcam to a video file while an
+online state machine watches the motion signal and auto-captures a keyframe
+each time the book settles after a page turn. Emits the same artifacts the
+offline front half produces, so P4-P9 work unchanged:
+
+  recordings/<name>.mp4        the principal recording (byproduct)
+  output/<name>/images/        full-res keyframe per spread
+  output/<name>/json/keyframes.json
+  output/<name>/json/metadata.json
+  output/<name>/data/{motion_signal,smoothed_signal}.npy
+
+Usage:
+  python scripts/p0_live_capture.py output/mybook recordings/mybook.mp4
+  python scripts/p0_live_capture.py output/mybook recordings/mybook.mp4 --camera 1
+
+Keys (in the live window):
+  Q / Esc   Quit and save
+  U         Undo last capture
+  C         Force-capture the current frame now
+  Space     Pause / resume auto-capture
+"""
+
+import argparse
+import json
+import sys
+import time
+from collections import deque
+
+import cv2
+import numpy as np
+from scipy.ndimage import uniform_filter1d
+
+from utils import log, ProjectPaths
+
+
+def laplacian_sharpness(gray):
+    h, w = gray.shape
+    center = gray[int(h * 0.1):int(h * 0.9), int(w * 0.1):int(w * 0.9)]
+    return float(cv2.Laplacian(center, cv2.CV_64F).var())
+
+
+def build_spreads(peaks, total_len, fps):
+    """Spread list in the same shape P2 emits (boundaries between page turns)."""
+    if len(peaks) == 0:
+        bounds = [(0, total_len)]
+    else:
+        bounds = [(0, int(peaks[0]))]
+        bounds += [(int(peaks[i]), int(peaks[i + 1])) for i in range(len(peaks) - 1)]
+        bounds.append((int(peaks[-1]), total_len))
+    return [{"spread_index": i + 1, "start_frame": s, "end_frame": e,
+             "frame_count": e - s, "duration_sec": round((e - s) / fps, 3),
+             "start_time": round(s / fps, 2), "end_time": round(e / fps, 2)}
+            for i, (s, e) in enumerate(bounds)]
+
+
+def draw_overlay(disp, state, motion, smooth, settle_thr, turn_thr,
+                 count, paused, flash_text, flash_until):
+    h, w = disp.shape[:2]
+    # Top status bar
+    cv2.rectangle(disp, (0, 0), (w, 70), (0, 0, 0), -1)
+    state_color = {"WAITING": (0, 200, 255), "SETTLED": (0, 220, 0),
+                   "TURNING": (0, 140, 255)}.get(state, (200, 200, 200))
+    cv2.putText(disp, f"{state}", (15, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, state_color, 2)
+    cv2.putText(disp, f"captured: {count}", (15, 58),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (230, 230, 230), 1)
+    if paused:
+        cv2.putText(disp, "PAUSED", (w - 130, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+    # Motion bar (maps motion onto a fixed scale relative to turn threshold)
+    bx, by, bw = 220, 22, w - 420
+    scale = max(turn_thr * 1.6, motion, 1e-3)
+    cv2.rectangle(disp, (bx, by), (bx + bw, by + 22), (60, 60, 60), 1)
+    fill = int(bw * min(smooth / scale, 1.0))
+    cv2.rectangle(disp, (bx, by), (bx + fill, by + 22), state_color, -1)
+    for thr, col in ((settle_thr, (0, 220, 0)), (turn_thr, (0, 140, 255))):
+        x = bx + int(bw * min(thr / scale, 1.0))
+        cv2.line(disp, (x, by - 4), (x, by + 26), col, 1)
+    cv2.putText(disp, f"motion {smooth:4.1f}", (bx, by + 42),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
+    # Help line
+    cv2.putText(disp, "Q quit  U undo  C capture  Space pause",
+                (15, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1)
+
+    # Capture flash
+    if time.time() < flash_until and flash_text:
+        cv2.putText(disp, flash_text, (w // 2 - 160, h // 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 255, 0), 3)
+    return disp
+
+
+def main():
+    p = argparse.ArgumentParser(description="Phase 0: Live webcam capture")
+    p.add_argument("output_dir", help="Base output directory (e.g. output/mybook)")
+    p.add_argument("video_out", help="Path to write the recording (e.g. recordings/mybook.mp4)")
+    p.add_argument("--camera", type=int, default=0, help="Camera index")
+    p.add_argument("--fps", type=float, default=30.0, help="Recording / timing fps")
+    p.add_argument("--analysis-height", type=int, default=360)
+    p.add_argument("--smoothing-window", type=int, default=15)
+    p.add_argument("--settle-threshold", type=float, default=2.0,
+                   help="Motion below this counts as 'still'")
+    p.add_argument("--turn-threshold", type=float, default=5.0,
+                   help="Motion above this counts as a page turn")
+    p.add_argument("--settle-time", type=float, default=0.4,
+                   help="Seconds of stillness required before capturing")
+    p.add_argument("--jpeg-quality", type=int, default=95)
+    args = p.parse_args()
+
+    log("=" * 60)
+    log("PHASE 0: Live Capture")
+    log("=" * 60)
+
+    paths = ProjectPaths(args.output_dir)
+    paths.ensure("images", "json", "data", "plots")
+
+    cap = cv2.VideoCapture(args.camera)
+    if not cap.isOpened():
+        log(f"ERROR: Cannot open camera {args.camera}")
+        sys.exit(1)
+    ret, frame = cap.read()
+    if not ret:
+        log("ERROR: Camera opened but returned no frame")
+        sys.exit(1)
+
+    orig_h, orig_w = frame.shape[:2]
+    scale = args.analysis_height / orig_h
+    aw = int(orig_w * scale)
+    log(f"Camera {args.camera}: {orig_w}x{orig_h}  analysis {aw}x{args.analysis_height}")
+    log(f"Recording to {args.video_out}")
+    log(f"Thresholds: settle<{args.settle_threshold} turn>{args.turn_threshold}, "
+        f"settle_time={args.settle_time}s")
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(args.video_out, fourcc, args.fps, (orig_w, orig_h))
+    if not writer.isOpened():
+        log(f"ERROR: Cannot open VideoWriter for {args.video_out}")
+        sys.exit(1)
+
+    settle_frames = max(1, int(args.settle_time * args.fps))
+    buf = deque(maxlen=settle_frames)   # (frame_index, frame_bgr, sharpness)
+
+    diffs = []                  # one motion value per recorded frame
+    keyframes = []
+    prev_small = None
+    frame_idx = -1
+    state = "WAITING"
+    still_run = 0               # consecutive low-motion frames
+    saw_turn = False
+    turn_frames = []            # frame index of each detected page turn (for peaks.npy)
+    paused = False
+    flash_text, flash_until = "", 0.0
+
+    def commit_capture(reason):
+        nonlocal flash_text, flash_until
+        if not buf:
+            return
+        fi, best_frame, best_sharp = max(buf, key=lambda b: b[2])
+        spread_start = keyframes[-1]["frame_index"] if keyframes else 0
+        filename = f"frame{fi:06d}.jpg"
+        cv2.imwrite(str(paths.images / filename), best_frame,
+                    [cv2.IMWRITE_JPEG_QUALITY, args.jpeg_quality])
+        keyframes.append({
+            "frame_index": fi,
+            "time_sec": round(fi / args.fps, 2),
+            "motion_value": round(float(diffs[fi]) if fi < len(diffs) else 0.0, 4),
+            "sharpness": round(best_sharp, 1),
+            "filename": filename,
+            "spread_start": spread_start,
+            "spread_end": fi,
+            "spread_duration": round((fi - spread_start) / args.fps, 3),
+            "source": "live",
+        })
+        flash_text = f"CAPTURED #{len(keyframes)} ({reason})"
+        flash_until = time.time() + 0.8
+        log(f"  Captured #{len(keyframes)}: frame {fi} "
+            f"(sharp={best_sharp:.0f}, {reason})")
+
+    def undo_capture():
+        nonlocal flash_text, flash_until
+        if not keyframes:
+            return
+        kf = keyframes.pop()
+        (paths.images / kf["filename"]).unlink(missing_ok=True)
+        flash_text = f"UNDO #{len(keyframes) + 1}"
+        flash_until = time.time() + 0.8
+        log(f"  Undid capture {kf['filename']}")
+
+    win = "ScanStudio - Live Capture"
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    t0 = time.time()
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            log("Camera stream ended.")
+            break
+
+        writer.write(frame)
+        frame_idx += 1
+
+        small = cv2.resize(frame, (aw, args.analysis_height), interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        motion = float(np.mean(cv2.absdiff(prev_small, gray))) if prev_small is not None else 0.0
+        prev_small = gray
+        diffs.append(motion)
+
+        # Short trailing mean for stable thresholding (online smoothing)
+        win_n = min(args.smoothing_window, len(diffs))
+        smooth = float(np.mean(diffs[-win_n:]))
+
+        buf.append((frame_idx, frame.copy(), laplacian_sharpness(gray)))
+
+        if not paused:
+            still = smooth < args.settle_threshold
+            still_run = still_run + 1 if still else 0
+
+            if state == "WAITING":
+                if still and still_run >= settle_frames:
+                    commit_capture("initial")
+                    state = "SETTLED"
+            elif state == "SETTLED":
+                if smooth > args.turn_threshold:
+                    state = "TURNING"
+                    saw_turn = True
+                    turn_frames.append(frame_idx)
+            elif state == "TURNING":
+                if still and still_run >= settle_frames and saw_turn:
+                    commit_capture("settle")
+                    state = "SETTLED"
+                    saw_turn = False
+
+        disp = draw_overlay(frame.copy(), state, motion, smooth,
+                            args.settle_threshold, args.turn_threshold,
+                            len(keyframes), paused, flash_text, flash_until)
+        cv2.imshow(win, disp)
+
+        key = cv2.waitKey(1) & 0xFF
+        if key in (ord("q"), 27):
+            break
+        elif key == ord("u"):
+            undo_capture()
+        elif key == ord("c"):
+            commit_capture("manual")
+            state = "SETTLED"
+            saw_turn = False
+        elif key == ord(" "):
+            paused = not paused
+            still_run = 0
+
+    cap.release()
+    writer.release()
+    cv2.destroyAllWindows()
+
+    total_frames = frame_idx + 1
+    elapsed = time.time() - t0
+    log(f"Recorded {total_frames} frames in {elapsed:.1f}s "
+        f"({total_frames / max(elapsed, 1e-3):.0f} fps), {len(keyframes)} keyframes")
+
+    diffs_arr = np.array(diffs, dtype=np.float64)
+    smoothed = uniform_filter1d(diffs_arr, size=args.smoothing_window) if len(diffs_arr) else diffs_arr
+    np.save(str(paths.data / "motion_signal.npy"), diffs_arr)
+    np.save(str(paths.data / "smoothed_signal.npy"), smoothed)
+
+    # Emit the P2/P3 markers too, so `make finish`/`make all` see the front-half
+    # dependency chain as satisfied and don't try to regenerate these keyframes.
+    peaks_arr = np.array(sorted(turn_frames), dtype=np.int64)
+    np.save(str(paths.data / "peaks.npy"), peaks_arr)
+    spreads = build_spreads(peaks_arr, total_frames, args.fps)
+    (paths.json / "spreads.json").write_text(json.dumps(spreads, indent=2))
+
+    metadata = {
+        "video_path": str(args.video_out),
+        "fps": args.fps,
+        "total_frames": total_frames,
+        "duration_sec": total_frames / args.fps,
+        "original_width": orig_w,
+        "original_height": orig_h,
+        "analysis_width": aw,
+        "analysis_height": args.analysis_height,
+        "frames_processed": total_frames,
+        "smoothing_window": args.smoothing_window,
+        "capture_source": "live",
+    }
+    (paths.json / "metadata.json").write_text(json.dumps(metadata, indent=2))
+    (paths.json / "keyframes.json").write_text(json.dumps(keyframes, indent=2))
+
+    log(f"  Wrote {len(keyframes)} keyframes -> {paths.json / 'keyframes.json'}")
+    log("")
+    log("PHASE 0 COMPLETE")
+    log(f"  Next: make finish VIDEO={args.video_out}")
+
+
+if __name__ == "__main__":
+    main()
