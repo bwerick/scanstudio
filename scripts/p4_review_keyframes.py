@@ -14,11 +14,11 @@ Keys:
   4    Delete: Other    5    Cover    6    Doc Start
   I    Insert frame (video scrubber)
   C    Toggle center guide
-  L    Set crop guides (←/→ move, Tab switch, Enter confirm, Esc cancel)
-  Shift+L  Per-frame crop override
   G    Adjust split/rotation (←/→ gutter, [ / ] rotate, Enter save, Esc cancel, ⌫ reset)
-  N    Note field
   ⌘S   Save
+
+Cropping and deskew are automatic (Phase 5). G previews that result and lets
+you correct the gutter (split) and rotation per spread.
 """
 
 import argparse, json, sys, time, shutil, os
@@ -188,24 +188,15 @@ class ReviewApp:
         # State
         self.current_idx = 0
         self.actions = {}  # index_in_list -> action key
-        self.notes = {}  # index_in_list -> note
         self.pending_deletes = []  # indices to delete on save
         self.pending_inserts = []  # {frame_index, frame_bgr} to add on save
         self.photo = None
         self.show_center_guide = True
         self.session_log = []
 
-        # Crop guides
-        self.crop_mode = False
-        self.crop_selected = "left"
-        self.global_crop_left = None
-        self.global_crop_right = None
-        self.per_frame_crops = {}
-        self._crop_per_frame = False
-        self._crop_temp_left = 0.15
-        self._crop_temp_right = 0.85
-
-        # Split / deskew adjust (overrides stored per-keyframe in keyframes.json)
+        # Split / deskew adjust (overrides stored per-keyframe in keyframes.json).
+        # Cropping/deskew themselves are automatic in Phase 5; G only tunes the
+        # gutter and rotation of that auto result.
         self.split_mode = False
         self._split_frac = 0.5  # gutter as fraction of cropped spread width
         self._split_rot = None  # deskew angle (deg); None = auto until resolved
@@ -214,21 +205,9 @@ class ReviewApp:
         self._split_crop = None  # cached cropped BGR preview
         self._split_auto_gutter = 0.5
         self._split_resolved_rot = 0.0
-
-        # Load existing crop from review_log
-        rl_path = self.paths.json / "review_log.json"
-        if rl_path.exists():
-            try:
-                rl = json.loads(rl_path.read_text())
-                for session in rl.get("sessions", []):
-                    gc = session.get("global_crop")
-                    if gc:
-                        self.global_crop_left = gc["left"]
-                        self.global_crop_right = gc["right"]
-                    for k, v in session.get("per_frame_crops", {}).items():
-                        self.per_frame_crops[int(k)] = v
-            except:
-                pass
+        self._split_photo = None  # cached PhotoImage so gutter nudges don't re-resize
+        self._split_photo_key = None
+        self._split_geom = (0, 0, 1, 1)  # ix0, iy0, dw, dh of the drawn preview
 
         # Restore cover/doc_start from keyframe data
         for i, kf in enumerate(self.keyframes):
@@ -236,8 +215,6 @@ class ReviewApp:
                 self.actions[i] = "cover"
             if kf.get("is_doc_start"):
                 self.actions[i] = "doc_start"
-            if kf.get("crop_bounds"):
-                self.per_frame_crops[i] = kf["crop_bounds"]
 
         self._build_ui()
         self._bind_keys()
@@ -351,30 +328,19 @@ class ReviewApp:
         )
         self.lbl_action.pack(anchor="w", padx=12, pady=(8, 4))
 
-        tk.Label(panel, text="NOTE (N)", font=("Menlo", 9), bg="#0f0f0f", fg=dim).pack(
-            anchor="w", padx=12, pady=(16, 4)
-        )
-        self.note_entry = tk.Text(
-            panel,
-            font=("Menlo", 10),
-            bg="#111",
-            fg=fg,
-            insertbackground=fg,
-            relief="flat",
-            height=3,
-            wrap="word",
-            highlightthickness=1,
-            highlightcolor="#334155",
-            highlightbackground="#1e293b",
-        )
-        self.note_entry.pack(fill="x", padx=8, pady=2)
-        self.note_entry.bind("<Return>", self._on_note_enter)
-
         hf = tk.Frame(panel, bg="#0f0f0f")
         hf.pack(side="bottom", fill="x", padx=12, pady=12)
         tk.Label(
             hf,
-            text="1 Keep  2 Dup  3 Occ\n4 Other  5 Cover  6 DocStart\nI Insert  C Center  L Crop\n←/A Prev  →/D Next  ⌘S Save",
+            text=(
+                "1 Keep     2 Dup\n"
+                "3 Occ      4 Other\n"
+                "5 Cover    6 DocStart\n"
+                "I Insert   C Center\n"
+                "G Split    (auto-crop)\n"
+                "←/A Prev   →/D Next\n"
+                "⌘S Save"
+            ),
             font=("Menlo", 9),
             bg="#0f0f0f",
             fg="#475569",
@@ -406,7 +372,7 @@ class ReviewApp:
                 n,
                 lambda e, a=act: (
                     self._set_action(a)
-                    if not self._in_text() and not self.crop_mode and not self.split_mode
+                    if not self._in_text() and not self.split_mode
                     else None
                 ),
             )
@@ -414,7 +380,7 @@ class ReviewApp:
             "i",
             lambda e: (
                 self._open_scrubber()
-                if not self._in_text() and not self.crop_mode and not self.split_mode
+                if not self._in_text() and not self.split_mode
                 else None
             ),
         )
@@ -422,41 +388,17 @@ class ReviewApp:
             "c",
             lambda e: (
                 self._toggle_center()
-                if not self._in_text() and not self.crop_mode and not self.split_mode
-                else None
-            ),
-        )
-        self.root.bind(
-            "l",
-            lambda e: (
-                self._enter_crop(False)
-                if not self._in_text() and not self.split_mode
-                else None
-            ),
-        )
-        self.root.bind(
-            "L",
-            lambda e: (
-                self._enter_crop(True)
                 if not self._in_text() and not self.split_mode
                 else None
             ),
         )
         self.root.bind(
             "g",
-            lambda e: (
-                self._enter_split()
-                if not self._in_text() and not self.crop_mode
-                else None
-            ),
+            lambda e: self._enter_split() if not self._in_text() else None,
         )
         self.root.bind(
             "G",
-            lambda e: (
-                self._enter_split()
-                if not self._in_text() and not self.crop_mode
-                else None
-            ),
+            lambda e: self._enter_split() if not self._in_text() else None,
         )
         self.root.bind(
             "bracketleft",
@@ -470,38 +412,17 @@ class ReviewApp:
             "<BackSpace>", lambda e: self._split_reset() if self.split_mode else None
         )
         self.root.bind(
-            "<Tab>", lambda e: self._crop_switch() if self.crop_mode else None
-        )
-        self.root.bind(
             "<Return>",
-            lambda e: (
-                self._crop_confirm()
-                if self.crop_mode
-                else self._split_confirm() if self.split_mode else None
-            ),
+            lambda e: self._split_confirm() if self.split_mode else None,
         )
         self.root.bind(
             "<Escape>",
-            lambda e: (
-                self._crop_cancel()
-                if self.crop_mode
-                else self._split_cancel() if self.split_mode else None
-            ),
-        )
-        self.root.bind(
-            "n",
-            lambda e: (
-                self.note_entry.focus_set()
-                if not self._in_text() and not self.crop_mode and not self.split_mode
-                else None
-            ),
+            lambda e: self._split_cancel() if self.split_mode else None,
         )
         self.root.bind("<Command-s>", lambda e: self._save())
 
     def _on_arrow(self, direction):
-        if self.crop_mode:
-            self._crop_move(0.005 if direction == "right" else -0.005)
-        elif self.split_mode:
+        if self.split_mode:
             self._split_move(0.002 if direction == "right" else -0.002)
         elif not self._in_text():
             if direction == "right":
@@ -510,23 +431,22 @@ class ReviewApp:
                 self._go_prev()
 
     def _nav_key(self, k):
-        if not self._in_text() and not self.crop_mode and not self.split_mode:
+        if not self._in_text() and not self.split_mode:
             if k == "d":
                 self._go_next()
             elif k == "a":
                 self._go_prev()
 
     def _in_text(self):
-        return self.root.focus_get() == self.note_entry
+        # No text-entry widgets remain; kept so key guards read uniformly.
+        return False
 
     def _go_next(self):
-        self._save_note()
         if self.current_idx < len(self.keyframes) - 1:
             self.current_idx += 1
             self._show_current()
 
     def _go_prev(self):
-        self._save_note()
         if self.current_idx > 0:
             self.current_idx -= 1
             self._show_current()
@@ -601,43 +521,6 @@ class ReviewApp:
                     width=1,
                     dash=(6, 4),
                 )
-
-            cl, cr = self._get_crop()
-            if cl is not None:
-                lx = ix0 + int(dw * cl)
-                rx = ix0 + int(dw * cr)
-                yt, yb = iy0 + int(dh * 0.01), iy0 + int(dh * 0.99)
-                lc = (
-                    "#00ffff"
-                    if self.crop_mode and self.crop_selected == "left"
-                    else "#00aaaa"
-                )
-                rc = (
-                    "#00ffff"
-                    if self.crop_mode and self.crop_selected == "right"
-                    else "#00aaaa"
-                )
-                self.canvas.create_line(
-                    lx, yt, lx, yb, fill=lc, width=3 if lc == "#00ffff" else 2
-                )
-                self.canvas.create_line(
-                    rx, yt, rx, yb, fill=rc, width=3 if rc == "#00ffff" else 2
-                )
-                self.canvas.create_rectangle(
-                    ix0, yt, lx, yb, fill="black", stipple="gray25", outline=""
-                )
-                self.canvas.create_rectangle(
-                    rx, yt, ix0 + dw, yb, fill="black", stipple="gray25", outline=""
-                )
-                if self.crop_mode:
-                    mode = "PER-FRAME" if self._crop_per_frame else "GLOBAL"
-                    self.canvas.create_text(
-                        cw // 2,
-                        iy0 + 15,
-                        text=f"CROP ({mode}) — ←/→ move, Tab switch, Enter confirm",
-                        fill="#00ffff",
-                        font=("Menlo", 10),
-                    )
         except Exception as e:
             self.canvas.delete("all")
             self.canvas.create_text(
@@ -660,11 +543,6 @@ class ReviewApp:
             fg=ACTIONS[cur_action]["color"] if cur_action else "#475569",
         )
 
-        self.note_entry.delete("1.0", "end")
-        note = self.notes.get(idx, "")
-        if note:
-            self.note_entry.insert("1.0", note)
-
     def _set_action(self, action):
         idx = self.current_idx
         if self.actions.get(idx) == action:
@@ -680,20 +558,6 @@ class ReviewApp:
             }
         )
         self._show_current()
-
-    def _save_note(self):
-        if not self.keyframes:
-            return
-        text = self.note_entry.get("1.0", "end").strip()
-        if text:
-            self.notes[self.current_idx] = text
-        else:
-            self.notes.pop(self.current_idx, None)
-
-    def _on_note_enter(self, e):
-        self._save_note()
-        self.root.focus_set()
-        return "break"
 
     def _toggle_center(self):
         self.show_center_guide = not self.show_center_guide
@@ -732,13 +596,11 @@ class ReviewApp:
                 break
             insert_at = i + 1
         self.keyframes.insert(insert_at, new_kf)
-        # Shift action/note indices
-        new_actions, new_notes = {}, {}
+        # Shift action indices past the insertion point
+        new_actions = {}
         for k, v in self.actions.items():
             new_actions[k + 1 if k >= insert_at else k] = v
-        for k, v in self.notes.items():
-            new_notes[k + 1 if k >= insert_at else k] = v
-        self.actions, self.notes = new_actions, new_notes
+        self.actions = new_actions
 
         self.pending_inserts.append(new_kf)
         self.session_log.append(
@@ -751,91 +613,15 @@ class ReviewApp:
         )
         self._show_current()
 
-    # ── Crop ──
-    def _get_crop(self):
-        idx = self.current_idx
-        if idx in self.per_frame_crops:
-            c = self.per_frame_crops[idx]
-            return c["left"], c["right"]
-        if self.global_crop_left is not None:
-            return self.global_crop_left, self.global_crop_right
-        if self.crop_mode:
-            return self._crop_temp_left, self._crop_temp_right
-        return None, None
-
-    def _enter_crop(self, per_frame):
-        if self.crop_mode:
-            self._crop_cancel()
-            return
-        self.crop_mode = True
-        self._crop_per_frame = per_frame
-        self.crop_selected = "left"
-        if per_frame and self.current_idx in self.per_frame_crops:
-            c = self.per_frame_crops[self.current_idx]
-            self._crop_temp_left, self._crop_temp_right = c["left"], c["right"]
-        elif self.global_crop_left is not None:
-            self._crop_temp_left, self._crop_temp_right = (
-                self.global_crop_left,
-                self.global_crop_right,
-            )
-        else:
-            self._crop_temp_left, self._crop_temp_right = 0.15, 0.85
-        self._show_current()
-
-    def _crop_move(self, delta):
-        if not self.crop_mode:
-            return
-        if self.crop_selected == "left":
-            self._crop_temp_left = max(0.0, min(0.48, self._crop_temp_left + delta))
-        else:
-            self._crop_temp_right = max(0.52, min(1.0, self._crop_temp_right + delta))
-        self._show_current()
-
-    def _crop_switch(self):
-        if self.crop_mode:
-            self.crop_selected = "right" if self.crop_selected == "left" else "left"
-            self._show_current()
-
-    def _crop_confirm(self):
-        if not self.crop_mode:
-            return
-        if self._crop_per_frame:
-            self.per_frame_crops[self.current_idx] = {
-                "left": round(self._crop_temp_left, 4),
-                "right": round(self._crop_temp_right, 4),
-            }
-        else:
-            self.global_crop_left = round(self._crop_temp_left, 4)
-            self.global_crop_right = round(self._crop_temp_right, 4)
-        self.crop_mode = False
-        self._show_current()
-
-    def _crop_cancel(self):
-        self.crop_mode = False
-        self._show_current()
-
     # ── Split / deskew adjust ──
-    def _committed_crop(self, idx):
-        """The side-trim (left, right) Phase 5 will apply, or (None, None).
-
-        Mirrors p5's effective crop so the split preview is cut exactly like the
-        real image p6 splits."""
-        if idx in self.per_frame_crops:
-            c = self.per_frame_crops[idx]
-            return c["left"], c["right"]
-        if self.global_crop_left is not None:
-            return self.global_crop_left, self.global_crop_right
-        return None, None
-
     def _build_split_preview(self, idx):
         """Crop + deskew the frame exactly as p5 will, caching the result.
 
         Re-uses p5's ``crop_double_page`` so the gutter measured here (as a
         fraction of the cropped width) lands where p6 actually splits. Cached by
-        (idx, rotation, side-crop) so nudging the gutter doesn't re-crop."""
+        (idx, rotation) so nudging the gutter doesn't re-crop."""
         rot = self._split_rot
-        cl, cr = self._committed_crop(idx)
-        key = (idx, None if rot is None else round(rot, 3), cl, cr)
+        key = (idx, None if rot is None else round(rot, 3))
         if key == self._split_cache_key and self._split_crop is not None:
             return
         kf = self.keyframes[idx]
@@ -845,9 +631,6 @@ class ReviewApp:
             self._split_resolved_rot = rot or 0.0
             self._split_cache_key = key
             return
-        if cl is not None:
-            w0 = img.shape[1]
-            img = img[:, int(w0 * cl) : int(w0 * cr)]
         if rot is None:
             rot = _spread_tilt(page_mask(img))
         cropped, _ = crop_double_page(img, 0.005, rot)
@@ -866,6 +649,8 @@ class ReviewApp:
         if kf.get("is_cover") or self.actions.get(idx) == "cover":
             messagebox.showinfo("Split", "Covers are not split into pages.")
             return
+        # Keep keyboard focus on the root so arrow keys reach the split handler.
+        self.root.focus_set()
         self.split_mode = True
         self._split_rot = kf.get("rotation_deg")
         self._split_rot_dirty = self._split_rot is not None
@@ -880,7 +665,9 @@ class ReviewApp:
         if not self.split_mode:
             return
         self._split_frac = max(0.05, min(0.95, self._split_frac + delta))
-        self._show_current()
+        # Only the gutter line moves — redraw the overlay, not the (expensive)
+        # base image, so nudging stays responsive on a 4K-ish frame.
+        self._draw_split_overlay()
 
     def _split_rotate(self, delta):
         if not self.split_mode:
@@ -928,8 +715,10 @@ class ReviewApp:
         self._show_current()
 
     def _render_split(self, cw, ch):
-        """Draw the cropped preview with the gutter (solid) and auto gutter
-        (dashed ghost) so the operator sees exactly where p6 will split."""
+        """Draw the cropped preview, then the gutter overlay on top.
+
+        The resized base image is cached (keyed by the crop result and canvas
+        size), so only the cheap overlay redraws while the gutter is nudged."""
         self._build_split_preview(self.current_idx)
         self.canvas.delete("all")
         cropped = self._split_crop
@@ -938,23 +727,36 @@ class ReviewApp:
                 cw // 2, ch // 2, text="(no preview)", fill="#ef4444"
             )
             return
-        rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
-        pil = Image.fromarray(rgb)
-        iw, ih = pil.size
+        ih, iw = cropped.shape[:2]
         scale = min(cw / iw, ch / ih, 1.0)
         dw, dh = max(1, int(iw * scale)), max(1, int(ih * scale))
-        pil = pil.resize((dw, dh), Image.LANCZOS)
-        self.photo = ImageTk.PhotoImage(pil)
-        self.canvas.create_image(cw // 2, ch // 2, image=self.photo, anchor="center")
-        ix0, iy0 = (cw - dw) // 2, (ch - dh) // 2
+        pkey = (self._split_cache_key, dw, dh)
+        if pkey != self._split_photo_key or self._split_photo is None:
+            rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
+            pil = Image.fromarray(rgb).resize((dw, dh), Image.LANCZOS)
+            self._split_photo = ImageTk.PhotoImage(pil)
+            self._split_photo_key = pkey
+        self.photo = self._split_photo
+        self.canvas.create_image(
+            cw // 2, ch // 2, image=self._split_photo, anchor="center", tags="img"
+        )
+        self._split_geom = ((cw - dw) // 2, (ch - dh) // 2, dw, dh)
+        self._draw_split_overlay()
+
+    def _draw_split_overlay(self):
+        """Redraw just the gutter line, auto-gutter ghost, and status text."""
+        self.canvas.delete("ov")
+        ix0, iy0, dw, dh = self._split_geom
         ax = ix0 + int(dw * self._split_auto_gutter)
         self.canvas.create_line(
-            ax, iy0, ax, iy0 + dh, fill="#22ff66", width=1, dash=(3, 5)
+            ax, iy0, ax, iy0 + dh, fill="#22ff66", width=1, dash=(3, 5), tags="ov"
         )
         gx = ix0 + int(dw * self._split_frac)
-        self.canvas.create_line(gx, iy0, gx, iy0 + dh, fill="#22ff66", width=2)
+        self.canvas.create_line(
+            gx, iy0, gx, iy0 + dh, fill="#22ff66", width=2, tags="ov"
+        )
         self.canvas.create_text(
-            cw // 2,
+            self.canvas.winfo_width() // 2,
             iy0 + 14,
             text=(
                 f"SPLIT — ←/→ gutter  [ / ] rotate ({self._split_resolved_rot:+.2f}°)  "
@@ -962,12 +764,11 @@ class ReviewApp:
             ),
             fill="#22ff66",
             font=("Menlo", 10),
+            tags="ov",
         )
 
     # ── Save ──
     def _save(self):
-        self._save_note()
-
         # Collect deletions
         del_indices = sorted(
             [i for i, a in self.actions.items() if a in ("dup", "occlusion", "other")],
@@ -981,7 +782,6 @@ class ReviewApp:
                     "frame_index": kf["frame_index"],
                     "filename": kf["filename"],
                     "reason": self.actions[i],
-                    "note": self.notes.get(i, ""),
                 }
             )
             # Delete image file
@@ -989,76 +789,34 @@ class ReviewApp:
             if img_path.exists():
                 img_path.unlink()
 
-        # Remove from list (reverse order to preserve indices)
+        # Capture cover/doc_start by frame_index BEFORE removing entries, so the
+        # flags survive the index shifts that deletion causes.
+        cover_frames = {
+            self.keyframes[i]["frame_index"]
+            for i, a in self.actions.items()
+            if a == "cover"
+        }
+        docstart_frames = {
+            self.keyframes[i]["frame_index"]
+            for i, a in self.actions.items()
+            if a == "doc_start"
+        }
+
+        # Remove deleted entries (reverse order to preserve indices)
         for i in del_indices:
             self.keyframes.pop(i)
 
-        # Apply cover and doc_start flags
-        # Rebuild actions/notes with new indices after deletion
-        new_actions, new_notes = {}, {}
-        old_to_new = {}
-        new_i = 0
-        for old_i in range(len(self.keyframes) + len(del_indices)):
-            if old_i not in [
-                d
-                for d in sorted(
-                    [
-                        i
-                        for i, a in self.actions.items()
-                        if a in ("dup", "occlusion", "other")
-                    ]
-                )
-            ]:
-                old_to_new[old_i] = new_i
-                new_i += 1
-
-        # Just rebuild from scratch based on current keyframes
-        for i, kf in enumerate(self.keyframes):
-            if kf.get("is_cover"):
-                pass  # already in data
-            if kf.get("is_doc_start"):
-                pass
-
-        # Apply flags directly to keyframe data
-        # Clear old flags first
+        # Re-apply flags to the surviving keyframes, matched by frame_index. This
+        # is what p5/p6 read to skip covers and reset page numbering; the gutter/
+        # rotation overrides on each keyframe are left untouched.
         for kf in self.keyframes:
-            kf.pop("is_cover", None)
-            kf.pop("is_doc_start", None)
-            kf.pop("crop_bounds", None)
-
-        # We need to map remaining actions to the post-deletion list
-        # Since we deleted in reverse, the remaining keyframes are the ones NOT deleted
-        # The actions dict indices are stale now. Let's just scan through and re-apply.
-        # Actually, this is getting complex. Let me simplify: just iterate through current keyframes
-        # and check if any were flagged before deletion happened.
-        # The simplest approach: just save and let the user re-flag if needed.
-        # BUT: covers and doc_starts were already set, so let's preserve them from actions.
-
-        # Re-index: rebuild actions for non-deleted entries
-        # This is the cleanest way:
-        remaining_actions = {}
-        remaining_notes = {}
-        # The actions dict still has old indices. After pop, indices shifted.
-        # Let's just not try to preserve - tell user to re-flag after big deletions.
-        # Actually, let's do it properly by tracking which originals survived:
-
-        # Too complex mid-save. Just write flags from the pre-delete actions.
-        # For each surviving keyframe, check if it had an action before deletion.
-        # We can't do this perfectly since indices shifted. Let's use frame_index as key.
-
-        frame_to_action = {}
-        frame_to_note = {}
-        # Capture before deletion (we already deleted, but we have the original actions keyed by old index)
-        # Actually we already mutated self.keyframes. Let me just apply what we can.
-
-        # Simple approach: write cover/doc_start directly into keyframe entries
-        for i, kf in enumerate(self.keyframes):
-            # Check original actions by frame_index
-            pass
-
-        # OK let me just use a frame_index based lookup that we build BEFORE deletion next time.
-        # For now, use the actions we had (some indices are wrong post-delete, but covers/doc_starts
-        # are typically at the start/end and unlikely to shift much).
+            fi = kf["frame_index"]
+            kf["is_cover"] = fi in cover_frames
+            kf["is_doc_start"] = fi in docstart_frames
+            if not kf["is_cover"]:
+                kf.pop("is_cover")
+            if not kf["is_doc_start"]:
+                kf.pop("is_doc_start")
 
         # Write keyframes.json
         (self.paths.json / "keyframes.json").write_text(
@@ -1072,17 +830,6 @@ class ReviewApp:
             "insertions": [
                 {"frame_index": ins["frame_index"]} for ins in self.pending_inserts
             ],
-            "notes": {
-                str(self.keyframes[k]["frame_index"]): v
-                for k, v in self.notes.items()
-                if k < len(self.keyframes)
-            },
-            "global_crop": (
-                {"left": self.global_crop_left, "right": self.global_crop_right}
-                if self.global_crop_left
-                else None
-            ),
-            "per_frame_crops": {str(k): v for k, v in self.per_frame_crops.items()},
             "keyframe_count_after": len(self.keyframes),
         }
 
@@ -1101,7 +848,6 @@ class ReviewApp:
         self.pending_deletes = []
         self.pending_inserts = []
         self.actions = {}
-        self.notes = {}
 
         # Re-flag covers/doc_starts from data
         for i, kf in enumerate(self.keyframes):
