@@ -5,13 +5,14 @@
 #   make review VIDEO=recordings/mybook.mp4
 #   make pdf VIDEO=recordings/mybook.mp4
 
-ifeq ($(filter install help live,$(MAKECMDGOALS)),)
+ifeq ($(filter install help live clean,$(MAKECMDGOALS)),)
 ifndef VIDEO
 $(error VIDEO is required. Usage: make all VIDEO=recordings/mybook.mp4)
 endif
 endif
 
-NAME     := $(basename $(notdir $(VIDEO)))
+# NAME derives from VIDEO, but can be set directly (e.g. for clean after a live run).
+NAME     ?= $(basename $(notdir $(VIDEO)))
 OUTDIR   := output/$(NAME)
 SCRIPTS  := scripts
 
@@ -57,7 +58,7 @@ help:
 	@echo "  pdf           P9: Build PDF"
 	@echo "  pdf-bw        P9: Build B&W PDF"
 	@echo ""
-	@echo "  clean         Delete all outputs"
+	@echo "  clean         Delete output/<NAME>/ (VIDEO= or NAME=; keeps recording)"
 	@echo ""
 	@echo "  SAFETY_MARGIN=$(SAFETY_MARGIN)  BLOCK_SIZE=$(BLOCK_SIZE)  BW_OFFSET=$(BW_OFFSET)"
 	@echo "  MODE=$(MODE)  (double=book spreads, single=loose docs)"
@@ -129,5 +130,9 @@ install:
 	pip install -r requirements.txt
 
 clean:
+ifeq ($(strip $(NAME)),)
+	$(error VIDEO or NAME required. Usage: make clean VIDEO=recordings/mybook.mp4  (or NAME=mybook))
+endif
 	@echo "Removing $(OUTDIR)/"
 	rm -rf $(OUTDIR)
+	@echo "Recording kept: recordings/$(NAME).mp4 (remove manually to fully undo the run)"
