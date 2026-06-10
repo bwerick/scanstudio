@@ -1,3 +1,7 @@
+# NOTE: The review GUIs (P4/P7) also require tkinter, a system package that is
+# NOT pip-installable. `make install` handles it (macOS: Homebrew
+# python-tk@<ver>; Debian/Ubuntu: apt install python3-tk).
+
 # Pipeline (P1–P9)
 numpy
 scipy

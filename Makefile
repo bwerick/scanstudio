@@ -5,7 +5,7 @@
 #   make review VIDEO=recordings/mybook.mp4
 #   make pdf VIDEO=recordings/mybook.mp4
 
-ifeq ($(filter install help live clean,$(MAKECMDGOALS)),)
+ifeq ($(filter install help live clean tkinter,$(MAKECMDGOALS)),)
 ifndef VIDEO
 $(error VIDEO is required. Usage: make all VIDEO=recordings/mybook.mp4)
 endif
@@ -35,7 +35,7 @@ SETTLE        ?= 2.0
 TURN          ?= 5.0
 SETTLE_TIME   ?= 0.4
 
-.PHONY: all bw live finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install help
+.PHONY: all bw live finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install tkinter help
 
 help:
 	@echo "ScanStudio Pipeline"
@@ -126,8 +126,23 @@ pdf-bw: $(PDF_BW)
 $(PDF_BW): $(BW_META)
 	python $(SCRIPTS)/p9_build_pdf.py $(OUTDIR) --source bw --pdf-name book_bw.pdf
 
-install:
+install: tkinter
 	pip install -r requirements.txt
+
+# tkinter is a system package (not pip-installable). The review GUIs (P4/P7)
+# need it. On macOS install the matching Homebrew package for the active Python.
+tkinter:
+	@python -c "import tkinter" 2>/dev/null && echo "tkinter OK" || { \
+		echo "tkinter missing."; \
+		if [ "$$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then \
+			ver=$$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"); \
+			echo "Installing python-tk@$$ver via Homebrew..."; \
+			brew install python-tk@$$ver; \
+		else \
+			echo "Install Tk for your Python, e.g. apt install python3-tk (Debian/Ubuntu)."; \
+			exit 1; \
+		fi; \
+	}
 
 clean:
 ifeq ($(strip $(NAME)),)
