@@ -28,20 +28,28 @@ class PageReviewApp:
             except: pass
         self._build_ui(); self._bind_keys(); self._show_current()
 
+    @staticmethod
+    def _button(parent, command, **kw):
+        # macOS Aqua tk.Button ignores bg/fg, so use a clickable Label instead.
+        kw.setdefault("cursor", "hand2")
+        lbl = tk.Label(parent, **kw)
+        lbl.bind("<Button-1>", lambda e: command())
+        return lbl
+
     def _build_ui(self):
         bg,fg,dim="#0a0a0a","#e2e8f0","#64748b"
         top=tk.Frame(self.root,bg="#111",height=40);top.pack(fill="x");top.pack_propagate(False)
         tk.Label(top,text="Page Review",font=("Menlo",13,"bold"),bg="#111",fg=fg).pack(side="left",padx=12)
         self.lbl_counter=tk.Label(top,text="",font=("Menlo",11),bg="#111",fg=dim);self.lbl_counter.pack(side="left",padx=8)
-        tk.Button(top,text="Save (⌘S)",font=("Menlo",10),bg="#3b82f6",fg="white",relief="flat",padx=10,
-                  command=self._save).pack(side="right",padx=8,pady=6)
+        self._button(top,self._save,text="Save (⌘S)",font=("Menlo",10),bg="#3b82f6",fg="white",relief="flat",padx=10,pady=4
+                  ).pack(side="right",padx=8,pady=6)
         main=tk.Frame(self.root,bg=bg);main.pack(fill="both",expand=True)
         self.lbl_info=tk.Label(main,text="",font=("Menlo",11),bg=bg,fg=dim);self.lbl_info.pack(pady=(8,4))
         self.canvas=tk.Canvas(main,bg="#111",highlightthickness=0);self.canvas.pack(fill="both",expand=True,padx=12,pady=4)
         self.canvas.bind("<Configure>",lambda e:self._show_current())
         nav=tk.Frame(main,bg=bg);nav.pack(pady=(0,8))
-        tk.Button(nav,text="← Prev",font=("Menlo",11),bg="#1e293b",fg=fg,relief="flat",padx=16,command=self._prev).pack(side="left",padx=4)
-        tk.Button(nav,text="Next →",font=("Menlo",11),bg="#1e293b",fg=fg,relief="flat",padx=16,command=self._next).pack(side="left",padx=4)
+        self._button(nav,self._prev,text="← Prev",font=("Menlo",11),bg="#1e293b",fg=fg,relief="flat",padx=16,pady=4).pack(side="left",padx=4)
+        self._button(nav,self._next,text="Next →",font=("Menlo",11),bg="#1e293b",fg=fg,relief="flat",padx=16,pady=4).pack(side="left",padx=4)
         self.note_entry=tk.Text(main,font=("Menlo",10),bg="#111",fg=fg,insertbackground=fg,relief="flat",height=2,wrap="word")
         self.note_entry.pack(fill="x",padx=12,pady=4)
 

@@ -85,7 +85,7 @@ class VideoScrubber:
         ).pack()
         bf = tk.Frame(bot, bg="#0a0a0a")
         bf.pack(pady=4)
-        tk.Button(
+        grab = tk.Label(
             bf,
             text="  ✓ GRAB  ",
             font=("Menlo", 11, "bold"),
@@ -93,9 +93,12 @@ class VideoScrubber:
             fg="white",
             relief="flat",
             padx=16,
-            command=self._grab,
-        ).pack(side="left", padx=16)
-        tk.Button(
+            pady=4,
+            cursor="hand2",
+        )
+        grab.bind("<Button-1>", lambda e: self._grab())
+        grab.pack(side="left", padx=16)
+        cancel = tk.Label(
             bf,
             text="Cancel",
             font=("Menlo", 10),
@@ -103,8 +106,11 @@ class VideoScrubber:
             fg="#94a3b8",
             relief="flat",
             padx=8,
-            command=self._cancel,
-        ).pack(side="left", padx=2)
+            pady=4,
+            cursor="hand2",
+        )
+        cancel.bind("<Button-1>", lambda e: self._cancel())
+        cancel.pack(side="left", padx=2)
 
         for key, delta in [
             ("<Right>", 1),
@@ -239,15 +245,16 @@ class ReviewApp:
             top, text="", font=("Menlo", 10), bg="#111", fg="#22c55e"
         )
         self.lbl_stats.pack(side="left", padx=8)
-        tk.Button(
+        self._button(
             top,
+            self._save,
             text="Save (⌘S)",
             font=("Menlo", 10),
             bg="#3b82f6",
             fg="white",
             relief="flat",
             padx=10,
-            command=self._save,
+            pady=4,
         ).pack(side="right", padx=8, pady=6)
 
         main = tk.Frame(self.root, bg=bg)
@@ -267,25 +274,27 @@ class ReviewApp:
 
         nav = tk.Frame(img_frame, bg=bg)
         nav.pack(pady=(0, 8))
-        tk.Button(
+        self._button(
             nav,
+            self._go_prev,
             text="← Prev (A)",
             font=("Menlo", 11),
             bg="#1e293b",
             fg=fg,
             relief="flat",
             padx=16,
-            command=self._go_prev,
+            pady=4,
         ).pack(side="left", padx=4)
-        tk.Button(
+        self._button(
             nav,
+            self._go_next,
             text="Next (D) →",
             font=("Menlo", 11),
             bg="#1e293b",
             fg=fg,
             relief="flat",
             padx=16,
-            command=self._go_next,
+            pady=4,
         ).pack(side="left", padx=4)
 
         panel = tk.Frame(main, bg="#0f0f0f", width=230)
@@ -296,8 +305,9 @@ class ReviewApp:
         )
         self.action_buttons = {}
         for key, cfg in ACTIONS.items():
-            btn = tk.Button(
+            btn = self._button(
                 panel,
+                lambda k=key: self._set_action(k),
                 text=f"  {cfg['key']}  {cfg['label']}",
                 font=("Menlo", 11),
                 anchor="w",
@@ -306,14 +316,14 @@ class ReviewApp:
                 pady=4,
                 bg="#0f0f0f",
                 fg="#94a3b8",
-                command=lambda k=key: self._set_action(k),
             )
             btn.pack(fill="x", padx=8, pady=2)
             self.action_buttons[key] = btn
 
         tk.Frame(panel, bg="#1e293b", height=1).pack(fill="x", padx=8, pady=8)
-        tk.Button(
+        self._button(
             panel,
+            self._open_scrubber,
             text="  I   Insert Frame",
             font=("Menlo", 11),
             anchor="w",
@@ -322,7 +332,6 @@ class ReviewApp:
             pady=4,
             bg="#0f0f0f",
             fg="#3b82f6",
-            command=self._open_scrubber,
         ).pack(fill="x", padx=8, pady=2)
 
         self.lbl_action = tk.Label(
@@ -359,6 +368,14 @@ class ReviewApp:
             fg="#475569",
             justify="left",
         ).pack(anchor="w")
+
+    @staticmethod
+    def _button(parent, command, **kw):
+        # macOS Aqua tk.Button ignores bg/fg, so use a clickable Label instead.
+        kw.setdefault("cursor", "hand2")
+        lbl = tk.Label(parent, **kw)
+        lbl.bind("<Button-1>", lambda e: command())
+        return lbl
 
     def _bind_keys(self):
         self.root.bind("<Right>", lambda e: self._on_arrow("right"))
