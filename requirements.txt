@@ -1,8 +1,15 @@
+# Pipeline (P1–P9)
+numpy
+scipy
+matplotlib
+opencv-python
 Pillow
+reportlab
+
+# Legacy / experimental scripts
 flordb>=3.4.12
 torch
 python-doctr[torch]
-opencv-python
 git+https://github.com/facebookresearch/segment-anything.git
 marker-pdf
 easyocr

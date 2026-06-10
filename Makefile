@@ -5,8 +5,10 @@
 #   make review VIDEO=recordings/mybook.mp4
 #   make pdf VIDEO=recordings/mybook.mp4
 
+ifeq ($(filter install help,$(MAKECMDGOALS)),)
 ifndef VIDEO
 $(error VIDEO is required. Usage: make all VIDEO=recordings/mybook.mp4)
+endif
 endif
 
 NAME     := $(basename $(notdir $(VIDEO)))
@@ -28,7 +30,7 @@ BLOCK_SIZE    ?= 51
 BW_OFFSET     ?= 10
 MODE          ?= double
 
-.PHONY: all bw motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean help
+.PHONY: all bw motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install help
 
 help:
 	@echo "ScanStudio Pipeline"
@@ -96,6 +98,9 @@ $(PDF): $(PAGES)
 pdf-bw: $(PDF_BW)
 $(PDF_BW): $(BW_META)
 	python $(SCRIPTS)/p9_build_pdf.py $(OUTDIR) --source bw --pdf-name book_bw.pdf
+
+install:
+	pip install -r requirements.txt
 
 clean:
 	@echo "Removing $(OUTDIR)/"
