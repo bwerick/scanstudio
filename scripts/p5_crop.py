@@ -53,6 +53,25 @@ def _spread_tilt(mask, max_deg=8.0):
     return angle if abs(angle) <= max_deg else 0.0
 
 
+def _mask_bounds(mask, min_frac=0.5):
+    """Robust page bounds ``(x, y, w, h)``, ignoring thin protrusions.
+
+    ``cv2.boundingRect`` spans the blob's maximum extent, so a page underneath
+    sticking out past the edge (or a finger) drags the crop outward and leaves
+    a band of table along the whole side. Instead, keep only the columns/rows
+    whose page coverage reaches ``min_frac`` of the peak coverage — a
+    protrusion spans a small fraction of the page height/width, so the bounds
+    snap to the page proper.
+    """
+    cols = (mask > 0).sum(axis=0)
+    rows = (mask > 0).sum(axis=1)
+    xs = np.where(cols >= cols.max() * min_frac)[0]
+    ys = np.where(rows >= rows.max() * min_frac)[0]
+    if not len(xs) or not len(ys):
+        return cv2.boundingRect(mask)
+    return int(xs[0]), int(ys[0]), int(xs[-1] + 1 - xs[0]), int(ys[-1] + 1 - ys[0])
+
+
 def crop_double_page(img, safety_pct, rotation_override=None):
     """Deskew and isolate a book spread from a tinted table.
 
@@ -87,7 +106,7 @@ def crop_double_page(img, safety_pct, rotation_override=None):
         )
         mask = page_mask(img)
 
-    x, y, bw, bh = cv2.boundingRect(mask)
+    x, y, bw, bh = _mask_bounds(mask)
     mx, my = int(w * safety_pct), int(h * safety_pct)
     x0, x1 = max(0, x - mx), min(w, x + bw + mx)
     return (

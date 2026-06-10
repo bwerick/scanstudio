@@ -105,9 +105,13 @@ def page_mask(img, sat_max: int = 70, val_min: int = 150) -> "np.ndarray":
     vt, _ = cv2.threshold(V, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     mask = ((S < sat_max) & (V > min(int(vt), val_min))).astype(np.uint8) * 255
 
+    # OPEN must run before CLOSE: wood-grain highlights pass the threshold as
+    # sparse speckle, and closing first solidifies that speckle into blobs that
+    # merge with the page. Opening first erases it while the dense page region
+    # survives.
     k = np.ones((25, 25), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
 
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not cnts:
