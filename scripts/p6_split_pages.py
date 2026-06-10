@@ -118,9 +118,12 @@ def main():
             if img is None:
                 continue
             h, w = img.shape[:2]
-            # Split at the detected gutter (spine), not the blind midpoint, so an
-            # off-center or translated spread still divides cleanly between pages.
-            mid = detect_gutter(img)
+            # Split at the gutter (spine), not the blind midpoint, so an off-center
+            # or translated spread still divides cleanly between pages. A manual
+            # override from Phase 4 (fraction of width) wins over auto-detection.
+            gutter = kf.get("gutter")
+            mid = int(round(w * gutter)) if gutter is not None else detect_gutter(img)
+            mid = max(1, min(w - 1, mid))
             left_half = img[:, :mid]
             right_half = img[:, mid:]
 

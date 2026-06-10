@@ -53,7 +53,7 @@ def _spread_tilt(mask, max_deg=8.0):
     return angle if abs(angle) <= max_deg else 0.0
 
 
-def crop_double_page(img, safety_pct):
+def crop_double_page(img, safety_pct, rotation_override=None):
     """Deskew and isolate a book spread from a tinted table.
 
     Replaces grayscale Otsu (which merges cream pages into light-brown wood)
@@ -62,6 +62,10 @@ def crop_double_page(img, safety_pct):
     and translation of the spread within the frame. The downstream split step
     finds the gutter on the result, so this only has to straighten and frame
     the spread.
+
+    ``rotation_override`` (degrees) replaces the auto-measured tilt when the
+    operator has corrected the deskew in Phase 4. p4's split preview calls this
+    with identical arguments, so the cropped result here matches what was shown.
     """
     h, w = img.shape[:2]
     mask = page_mask(img)
@@ -71,7 +75,7 @@ def crop_double_page(img, safety_pct):
         mx, my = int(w * 0.02), int(h * 0.02)
         return img[my : h - my, mx : w - mx], "fallback"
 
-    angle = _spread_tilt(mask)
+    angle = rotation_override if rotation_override is not None else _spread_tilt(mask)
     if abs(angle) > 0.2:
         M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
         img = cv2.warpAffine(
@@ -317,7 +321,8 @@ def main():
 
             # Step 2: Otsu page detection
             if not args.no_otsu and not is_cover:
-                cropped, method = crop_double_page(img, args.safety_margin)
+                rot = kf.get("rotation_deg")
+                cropped, method = crop_double_page(img, args.safety_margin, rot)
             else:
                 cropped = img
                 method = "bounds_only" if crop else "none"

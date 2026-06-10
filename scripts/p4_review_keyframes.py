@@ -16,6 +16,7 @@ Keys:
   C    Toggle center guide
   L    Set crop guides (←/→ move, Tab switch, Enter confirm, Esc cancel)
   Shift+L  Per-frame crop override
+  G    Adjust split/rotation (←/→ gutter, [ / ] rotate, Enter save, Esc cancel, ⌫ reset)
   N    Note field
   ⌘S   Save
 """
@@ -35,7 +36,8 @@ import tkinter as tk
 from tkinter import messagebox
 from PIL import Image, ImageTk
 
-from utils import log, ProjectPaths, ensure_dir
+from utils import log, ProjectPaths, ensure_dir, detect_gutter, page_mask
+from p5_crop import crop_double_page, _spread_tilt
 
 ACTIONS = {
     "keep": {"color": "#22c55e", "label": "Keep", "key": "1"},
@@ -202,6 +204,16 @@ class ReviewApp:
         self._crop_per_frame = False
         self._crop_temp_left = 0.15
         self._crop_temp_right = 0.85
+
+        # Split / deskew adjust (overrides stored per-keyframe in keyframes.json)
+        self.split_mode = False
+        self._split_frac = 0.5  # gutter as fraction of cropped spread width
+        self._split_rot = None  # deskew angle (deg); None = auto until resolved
+        self._split_rot_dirty = False  # True once the operator nudges rotation
+        self._split_cache_key = None
+        self._split_crop = None  # cached cropped BGR preview
+        self._split_auto_gutter = 0.5
+        self._split_resolved_rot = 0.0
 
         # Load existing crop from review_log
         rl_path = self.paths.json / "review_log.json"
@@ -394,7 +406,7 @@ class ReviewApp:
                 n,
                 lambda e, a=act: (
                     self._set_action(a)
-                    if not self._in_text() and not self.crop_mode
+                    if not self._in_text() and not self.crop_mode and not self.split_mode
                     else None
                 ),
             )
@@ -402,7 +414,7 @@ class ReviewApp:
             "i",
             lambda e: (
                 self._open_scrubber()
-                if not self._in_text() and not self.crop_mode
+                if not self._in_text() and not self.crop_mode and not self.split_mode
                 else None
             ),
         )
@@ -410,30 +422,77 @@ class ReviewApp:
             "c",
             lambda e: (
                 self._toggle_center()
+                if not self._in_text() and not self.crop_mode and not self.split_mode
+                else None
+            ),
+        )
+        self.root.bind(
+            "l",
+            lambda e: (
+                self._enter_crop(False)
+                if not self._in_text() and not self.split_mode
+                else None
+            ),
+        )
+        self.root.bind(
+            "L",
+            lambda e: (
+                self._enter_crop(True)
+                if not self._in_text() and not self.split_mode
+                else None
+            ),
+        )
+        self.root.bind(
+            "g",
+            lambda e: (
+                self._enter_split()
                 if not self._in_text() and not self.crop_mode
                 else None
             ),
         )
         self.root.bind(
-            "l", lambda e: self._enter_crop(False) if not self._in_text() else None
+            "G",
+            lambda e: (
+                self._enter_split()
+                if not self._in_text() and not self.crop_mode
+                else None
+            ),
         )
         self.root.bind(
-            "L", lambda e: self._enter_crop(True) if not self._in_text() else None
+            "bracketleft",
+            lambda e: self._split_rotate(-0.25) if self.split_mode else None,
+        )
+        self.root.bind(
+            "bracketright",
+            lambda e: self._split_rotate(0.25) if self.split_mode else None,
+        )
+        self.root.bind(
+            "<BackSpace>", lambda e: self._split_reset() if self.split_mode else None
         )
         self.root.bind(
             "<Tab>", lambda e: self._crop_switch() if self.crop_mode else None
         )
         self.root.bind(
-            "<Return>", lambda e: self._crop_confirm() if self.crop_mode else None
+            "<Return>",
+            lambda e: (
+                self._crop_confirm()
+                if self.crop_mode
+                else self._split_confirm() if self.split_mode else None
+            ),
         )
         self.root.bind(
-            "<Escape>", lambda e: self._crop_cancel() if self.crop_mode else None
+            "<Escape>",
+            lambda e: (
+                self._crop_cancel()
+                if self.crop_mode
+                else self._split_cancel() if self.split_mode else None
+            ),
         )
         self.root.bind(
             "n",
             lambda e: (
                 self.note_entry.focus_set()
-                if not self._in_text() and not self.crop_mode
+                if not self._in_text() and not self.crop_mode and not self.split_mode
                 else None
             ),
         )
@@ -442,6 +501,8 @@ class ReviewApp:
     def _on_arrow(self, direction):
         if self.crop_mode:
             self._crop_move(0.005 if direction == "right" else -0.005)
+        elif self.split_mode:
+            self._split_move(0.002 if direction == "right" else -0.002)
         elif not self._in_text():
             if direction == "right":
                 self._go_next()
@@ -449,7 +510,7 @@ class ReviewApp:
                 self._go_prev()
 
     def _nav_key(self, k):
-        if not self._in_text() and not self.crop_mode:
+        if not self._in_text() and not self.crop_mode and not self.split_mode:
             if k == "d":
                 self._go_next()
             elif k == "a":
@@ -496,6 +557,10 @@ class ReviewApp:
         img_path = self.paths.images / kf["filename"]
         cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
         if cw < 10:
+            return
+
+        if self.split_mode:
+            self._render_split(cw, ch)
             return
 
         try:
@@ -748,6 +813,156 @@ class ReviewApp:
     def _crop_cancel(self):
         self.crop_mode = False
         self._show_current()
+
+    # ── Split / deskew adjust ──
+    def _committed_crop(self, idx):
+        """The side-trim (left, right) Phase 5 will apply, or (None, None).
+
+        Mirrors p5's effective crop so the split preview is cut exactly like the
+        real image p6 splits."""
+        if idx in self.per_frame_crops:
+            c = self.per_frame_crops[idx]
+            return c["left"], c["right"]
+        if self.global_crop_left is not None:
+            return self.global_crop_left, self.global_crop_right
+        return None, None
+
+    def _build_split_preview(self, idx):
+        """Crop + deskew the frame exactly as p5 will, caching the result.
+
+        Re-uses p5's ``crop_double_page`` so the gutter measured here (as a
+        fraction of the cropped width) lands where p6 actually splits. Cached by
+        (idx, rotation, side-crop) so nudging the gutter doesn't re-crop."""
+        rot = self._split_rot
+        cl, cr = self._committed_crop(idx)
+        key = (idx, None if rot is None else round(rot, 3), cl, cr)
+        if key == self._split_cache_key and self._split_crop is not None:
+            return
+        kf = self.keyframes[idx]
+        img = cv2.imread(str(self.paths.images / kf["filename"]))
+        if img is None:
+            self._split_crop, self._split_auto_gutter = None, 0.5
+            self._split_resolved_rot = rot or 0.0
+            self._split_cache_key = key
+            return
+        if cl is not None:
+            w0 = img.shape[1]
+            img = img[:, int(w0 * cl) : int(w0 * cr)]
+        if rot is None:
+            rot = _spread_tilt(page_mask(img))
+        cropped, _ = crop_double_page(img, 0.005, rot)
+        gw = max(1, cropped.shape[1])
+        self._split_resolved_rot = rot
+        self._split_crop = cropped
+        self._split_auto_gutter = detect_gutter(cropped) / gw
+        self._split_cache_key = key
+
+    def _enter_split(self):
+        if self.split_mode:
+            self._split_cancel()
+            return
+        idx = self.current_idx
+        kf = self.keyframes[idx]
+        if kf.get("is_cover") or self.actions.get(idx) == "cover":
+            messagebox.showinfo("Split", "Covers are not split into pages.")
+            return
+        self.split_mode = True
+        self._split_rot = kf.get("rotation_deg")
+        self._split_rot_dirty = self._split_rot is not None
+        self._split_cache_key = None
+        self._build_split_preview(idx)
+        # Concretize the baseline angle so [ / ] nudge from the auto value.
+        self._split_rot = self._split_resolved_rot
+        self._split_frac = kf.get("gutter", self._split_auto_gutter)
+        self._show_current()
+
+    def _split_move(self, delta):
+        if not self.split_mode:
+            return
+        self._split_frac = max(0.05, min(0.95, self._split_frac + delta))
+        self._show_current()
+
+    def _split_rotate(self, delta):
+        if not self.split_mode:
+            return
+        self._split_rot = (self._split_rot or 0.0) + delta
+        self._split_rot_dirty = True
+        self._build_split_preview(self.current_idx)
+        self._show_current()
+
+    def _split_reset(self):
+        if not self.split_mode:
+            return
+        kf = self.keyframes[self.current_idx]
+        kf.pop("gutter", None)
+        kf.pop("rotation_deg", None)
+        self._split_rot = None
+        self._split_rot_dirty = False
+        self._split_cache_key = None
+        self._build_split_preview(self.current_idx)
+        self._split_rot = self._split_resolved_rot
+        self._split_frac = self._split_auto_gutter
+        self._show_current()
+
+    def _split_confirm(self):
+        if not self.split_mode:
+            return
+        kf = self.keyframes[self.current_idx]
+        kf["gutter"] = round(self._split_frac, 4)
+        if self._split_rot_dirty:
+            kf["rotation_deg"] = round(self._split_rot, 3)
+        self.session_log.append(
+            {
+                "time": datetime.now().isoformat(),
+                "type": "split",
+                "frame": kf["frame_index"],
+                "gutter": kf["gutter"],
+                "rotation_deg": kf.get("rotation_deg"),
+            }
+        )
+        self.split_mode = False
+        self._show_current()
+
+    def _split_cancel(self):
+        self.split_mode = False
+        self._show_current()
+
+    def _render_split(self, cw, ch):
+        """Draw the cropped preview with the gutter (solid) and auto gutter
+        (dashed ghost) so the operator sees exactly where p6 will split."""
+        self._build_split_preview(self.current_idx)
+        self.canvas.delete("all")
+        cropped = self._split_crop
+        if cropped is None:
+            self.canvas.create_text(
+                cw // 2, ch // 2, text="(no preview)", fill="#ef4444"
+            )
+            return
+        rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
+        pil = Image.fromarray(rgb)
+        iw, ih = pil.size
+        scale = min(cw / iw, ch / ih, 1.0)
+        dw, dh = max(1, int(iw * scale)), max(1, int(ih * scale))
+        pil = pil.resize((dw, dh), Image.LANCZOS)
+        self.photo = ImageTk.PhotoImage(pil)
+        self.canvas.create_image(cw // 2, ch // 2, image=self.photo, anchor="center")
+        ix0, iy0 = (cw - dw) // 2, (ch - dh) // 2
+        ax = ix0 + int(dw * self._split_auto_gutter)
+        self.canvas.create_line(
+            ax, iy0, ax, iy0 + dh, fill="#22ff66", width=1, dash=(3, 5)
+        )
+        gx = ix0 + int(dw * self._split_frac)
+        self.canvas.create_line(gx, iy0, gx, iy0 + dh, fill="#22ff66", width=2)
+        self.canvas.create_text(
+            cw // 2,
+            iy0 + 14,
+            text=(
+                f"SPLIT — ←/→ gutter  [ / ] rotate ({self._split_resolved_rot:+.2f}°)  "
+                f"Enter save  Esc cancel  ⌫ reset   gutter={self._split_frac:.3f}"
+            ),
+            fill="#22ff66",
+            font=("Menlo", 10),
+        )
 
     # ── Save ──
     def _save(self):
