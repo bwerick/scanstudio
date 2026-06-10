@@ -24,42 +24,67 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from utils import log, ProjectPaths, check_overwrite
+from utils import log, ProjectPaths, check_overwrite, page_mask
 
 # ── Double-page crop (books) ─────────────────────────────────
 
 
+def _spread_tilt(mask, max_deg=8.0):
+    """Estimate spread rotation (degrees) from the mask's top edge.
+
+    The top edge of a flat-lying spread is a near-straight line; its slope is
+    the rotation. A robust (Huber) line fit ignores the finger/notch outliers,
+    and columns where the page runs off the top of the frame are skipped since
+    their "top" is the frame border, not the page. Returns 0 when the estimate
+    is implausibly large (mask too ragged to trust).
+    """
+    h, w = mask.shape
+    xs, ys = [], []
+    for x in range(0, w, 4):
+        col = np.where(mask[:, x] > 0)[0]
+        if len(col) and 2 < col[0] < h * 0.45:
+            xs.append(x)
+            ys.append(int(col[0]))
+    if len(xs) < 20:
+        return 0.0
+    pts = np.column_stack([xs, ys]).astype(np.float32)
+    vx, vy, _, _ = cv2.fitLine(pts, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
+    angle = float(np.degrees(np.arctan2(vy, vx)))
+    return angle if abs(angle) <= max_deg else 0.0
+
+
 def crop_double_page(img, safety_pct):
-    """Otsu-based crop for book spreads."""
+    """Deskew and isolate a book spread from a tinted table.
+
+    Replaces grayscale Otsu (which merges cream pages into light-brown wood)
+    with an HSV page mask, measures the spread's tilt from the mask's top edge,
+    rotates to deskew, then tight-crops to the page bounds. Robust to rotation
+    and translation of the spread within the frame. The downstream split step
+    finds the gutter on the result, so this only has to straighten and frame
+    the spread.
+    """
     h, w = img.shape[:2]
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    mask = page_mask(img)
 
-    kernel = np.ones((15, 15), np.uint8)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+    if cv2.countNonZero(mask) < 0.2 * w * h:
+        # No page-sized bright region found — leave the frame essentially as-is.
+        mx, my = int(w * 0.02), int(h * 0.02)
+        return img[my : h - my, mx : w - mx], "fallback"
 
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    angle = _spread_tilt(mask)
+    if abs(angle) > 0.2:
+        M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+        img = cv2.warpAffine(
+            img, M, (w, h), flags=cv2.INTER_LINEAR, borderValue=(255, 255, 255)
+        )
+        mask = page_mask(img)
 
-    if contours:
-        largest = max(contours, key=cv2.contourArea)
-        area = cv2.contourArea(largest)
-        x, y, bw, bh = cv2.boundingRect(largest)
-
-        if area / (w * h) > 0.35 and bh / h > 0.7:
-            mx = int(w * safety_pct)
-            my = int(h * safety_pct)
-            return (
-                img[
-                    max(0, y - my) : min(h, y + bh + my),
-                    max(0, x - mx) : min(w, x + bw + mx),
-                ],
-                "otsu",
-            )
-
-    # Fallback
-    mx, my = int(w * 0.02), int(h * 0.02)
-    return img[my : h - my, mx : w - mx], "fallback"
+    x, y, bw, bh = cv2.boundingRect(mask)
+    mx, my = int(w * safety_pct), int(h * safety_pct)
+    return (
+        img[max(0, y - my) : min(h, y + bh + my), max(0, x - mx) : min(w, x + bw + mx)],
+        "hsv_deskew",
+    )
 
 
 # ── Single-page crop (loose documents) ───────────────────────

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import cv2
 
-from utils import log, ProjectPaths, check_overwrite_dir
+from utils import log, ProjectPaths, check_overwrite_dir, detect_gutter
 
 
 def main():
@@ -118,7 +118,9 @@ def main():
             if img is None:
                 continue
             h, w = img.shape[:2]
-            mid = w // 2
+            # Split at the detected gutter (spine), not the blind midpoint, so an
+            # off-center or translated spread still divides cleanly between pages.
+            mid = detect_gutter(img)
             left_half = img[:, :mid]
             right_half = img[:, mid:]
 
