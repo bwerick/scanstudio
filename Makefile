@@ -22,8 +22,8 @@ PEAKS     := $(OUTDIR)/data/peaks.npy
 KEYFRAMES := $(OUTDIR)/json/keyframes.json
 PAGES     := $(OUTDIR)/json/pages.json
 BW_META   := $(OUTDIR)/json/bw_metadata.json
-PDF       := $(OUTDIR)/pdf/book.pdf
-PDF_BW    := $(OUTDIR)/pdf/book_bw.pdf
+PDF       := $(OUTDIR)/pdf/$(NAME).pdf
+PDF_BW    := $(OUTDIR)/pdf/$(NAME)_bw.pdf
 
 # Default parameters
 SAFETY_MARGIN ?= 0.005
@@ -124,7 +124,7 @@ $(PDF): $(PAGES)
 
 pdf-bw: $(PDF_BW)
 $(PDF_BW): $(BW_META)
-	python $(SCRIPTS)/p9_build_pdf.py $(OUTDIR) --source bw --pdf-name book_bw.pdf
+	python $(SCRIPTS)/p9_build_pdf.py $(OUTDIR) --source bw --pdf-name $(NAME)_bw.pdf
 
 install: tkinter
 	pip install -r requirements.txt

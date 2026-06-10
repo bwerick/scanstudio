@@ -34,7 +34,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("output_dir")
     parser.add_argument("--source", default="pages", choices=["pages", "bw"])
-    parser.add_argument("--pdf-name", default="book.pdf")
+    parser.add_argument("--pdf-name", default=None,
+                        help="Output filename (default: <project>.pdf)")
     parser.add_argument("--jpeg-quality", type=int, default=90)
     args = parser.parse_args()
 
@@ -43,7 +44,8 @@ def main():
     ensure_dir(paths.pdf)
     source_dir = paths.pages if args.source == "pages" else (paths.base / "bw")
     pages = json.loads((paths.json / "pages.json").read_text())
-    pdf_path = paths.pdf / args.pdf_name
+    pdf_name = args.pdf_name or f"{paths.base.name}.pdf"
+    pdf_path = paths.pdf / pdf_name
     if pdf_path.exists() and not check_overwrite(pdf_path): return
 
     build_pdf(pages, source_dir, pdf_path, args.jpeg_quality)
