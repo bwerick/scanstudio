@@ -66,6 +66,10 @@ def crop_double_page(img, safety_pct, rotation_override=None):
     ``rotation_override`` (degrees) replaces the auto-measured tilt when the
     operator has corrected the deskew in Phase 4. p4's split preview calls this
     with identical arguments, so the cropped result here matches what was shown.
+
+    Returns ``(cropped, method, (x0, crop_w))`` where ``x0`` is the left crop
+    offset and ``crop_w`` the cropped width (in deskewed-frame pixels), so a
+    gutter measured on the crop can be mapped back onto the original frame.
     """
     h, w = img.shape[:2]
     mask = page_mask(img)
@@ -73,7 +77,7 @@ def crop_double_page(img, safety_pct, rotation_override=None):
     if cv2.countNonZero(mask) < 0.2 * w * h:
         # No page-sized bright region found — leave the frame essentially as-is.
         mx, my = int(w * 0.02), int(h * 0.02)
-        return img[my : h - my, mx : w - mx], "fallback"
+        return img[my : h - my, mx : w - mx], "fallback", (mx, w - 2 * mx)
 
     angle = rotation_override if rotation_override is not None else _spread_tilt(mask)
     if abs(angle) > 0.2:
@@ -85,9 +89,11 @@ def crop_double_page(img, safety_pct, rotation_override=None):
 
     x, y, bw, bh = cv2.boundingRect(mask)
     mx, my = int(w * safety_pct), int(h * safety_pct)
+    x0, x1 = max(0, x - mx), min(w, x + bw + mx)
     return (
-        img[max(0, y - my) : min(h, y + bh + my), max(0, x - mx) : min(w, x + bw + mx)],
+        img[max(0, y - my) : min(h, y + bh + my), x0:x1],
         "hsv_deskew",
+        (x0, x1 - x0),
     )
 
 
@@ -322,7 +328,7 @@ def main():
             # Step 2: Otsu page detection
             if not args.no_otsu and not is_cover:
                 rot = kf.get("rotation_deg")
-                cropped, method = crop_double_page(img, args.safety_margin, rot)
+                cropped, method, _ = crop_double_page(img, args.safety_margin, rot)
             else:
                 cropped = img
                 method = "bounds_only" if crop else "none"

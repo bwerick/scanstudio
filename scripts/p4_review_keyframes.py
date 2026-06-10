@@ -191,7 +191,7 @@ class ReviewApp:
         self.pending_deletes = []  # indices to delete on save
         self.pending_inserts = []  # {frame_index, frame_bgr} to add on save
         self.photo = None
-        self.show_center_guide = True
+        self.show_center_guide = False
         self.session_log = []
 
         # Split / deskew adjust (overrides stored per-keyframe in keyframes.json).
@@ -205,9 +205,13 @@ class ReviewApp:
         self._split_crop = None  # cached cropped BGR preview
         self._split_auto_gutter = 0.5
         self._split_resolved_rot = 0.0
+        self._split_x0 = 0  # left crop offset (px, deskewed frame)
+        self._split_cw = 1  # cropped width (px)
+        self._split_raw_w = 1  # original frame width (px)
         self._split_photo = None  # cached PhotoImage so gutter nudges don't re-resize
         self._split_photo_key = None
         self._split_geom = (0, 0, 1, 1)  # ix0, iy0, dw, dh of the drawn preview
+        self._gutter_cache = {}  # idx -> auto gutter fraction, for the default marker
 
         # Restore cover/doc_start from keyframe data
         for i, kf in enumerate(self.keyframes):
@@ -401,11 +405,11 @@ class ReviewApp:
             lambda e: self._enter_split() if not self._in_text() else None,
         )
         self.root.bind(
-            "bracketleft",
+            "<bracketleft>",
             lambda e: self._split_rotate(-0.25) if self.split_mode else None,
         )
         self.root.bind(
-            "bracketright",
+            "<bracketright>",
             lambda e: self._split_rotate(0.25) if self.split_mode else None,
         )
         self.root.bind(
@@ -521,6 +525,27 @@ class ReviewApp:
                     width=1,
                     dash=(6, 4),
                 )
+
+            # Show the gutter (split line) so you can tell at a glance whether a
+            # spread needs adjusting. Solid if you've set an override, dashed if
+            # it's the auto estimate. Press G to tune it.
+            is_cover = kf.get("is_cover") or self.actions.get(idx) == "cover"
+            if not is_cover:
+                has_override = kf.get("gutter") is not None
+                if has_override:
+                    frac = kf.get("gutter_raw", kf["gutter"])
+                else:
+                    frac = self._auto_gutter_frac(idx, img)
+                gx = ix0 + int(dw * frac)
+                self.canvas.create_line(
+                    gx,
+                    iy0,
+                    gx,
+                    iy0 + dh,
+                    fill="#22ff66",
+                    width=2,
+                    dash=() if has_override else (4, 4),
+                )
         except Exception as e:
             self.canvas.delete("all")
             self.canvas.create_text(
@@ -601,6 +626,7 @@ class ReviewApp:
         for k, v in self.actions.items():
             new_actions[k + 1 if k >= insert_at else k] = v
         self.actions = new_actions
+        self._gutter_cache.clear()  # indices shifted
 
         self.pending_inserts.append(new_kf)
         self.session_log.append(
@@ -614,6 +640,23 @@ class ReviewApp:
         self._show_current()
 
     # ── Split / deskew adjust ──
+    def _auto_gutter_frac(self, idx, disp_img):
+        """Estimate the gutter as a fraction of width for the default marker.
+
+        Runs on the already-resized display image (cheap, resolution-independent)
+        and caches per frame. This is the at-a-glance indicator; G's preview
+        computes the exact split on the cropped/deskewed spread."""
+        cached = self._gutter_cache.get(idx)
+        if cached is not None:
+            return cached
+        try:
+            arr = cv2.cvtColor(np.array(disp_img), cv2.COLOR_RGB2BGR)
+            frac = detect_gutter(arr) / max(1, arr.shape[1])
+        except Exception:
+            frac = 0.5
+        self._gutter_cache[idx] = frac
+        return frac
+
     def _build_split_preview(self, idx):
         """Crop + deskew the frame exactly as p5 will, caching the result.
 
@@ -633,11 +676,15 @@ class ReviewApp:
             return
         if rot is None:
             rot = _spread_tilt(page_mask(img))
-        cropped, _ = crop_double_page(img, 0.005, rot)
+        cropped, _, (x0, cw) = crop_double_page(img, 0.005, rot)
         gw = max(1, cropped.shape[1])
         self._split_resolved_rot = rot
         self._split_crop = cropped
         self._split_auto_gutter = detect_gutter(cropped) / gw
+        # Crop geometry, so a cropped-fraction gutter maps back to the raw frame.
+        self._split_x0 = x0
+        self._split_cw = cw
+        self._split_raw_w = img.shape[1]
         self._split_cache_key = key
 
     def _enter_split(self):
@@ -682,7 +729,9 @@ class ReviewApp:
             return
         kf = self.keyframes[self.current_idx]
         kf.pop("gutter", None)
+        kf.pop("gutter_raw", None)
         kf.pop("rotation_deg", None)
+        self._gutter_cache.pop(self.current_idx, None)
         self._split_rot = None
         self._split_rot_dirty = False
         self._split_cache_key = None
@@ -696,6 +745,10 @@ class ReviewApp:
             return
         kf = self.keyframes[self.current_idx]
         kf["gutter"] = round(self._split_frac, 4)
+        # Map the cropped-fraction gutter back to a fraction of the raw frame so
+        # the default marker can be drawn on the un-cropped review image.
+        raw_x = self._split_x0 + self._split_frac * self._split_cw
+        kf["gutter_raw"] = round(raw_x / max(1, self._split_raw_w), 4)
         if self._split_rot_dirty:
             kf["rotation_deg"] = round(self._split_rot, 3)
         self.session_log.append(
@@ -848,6 +901,7 @@ class ReviewApp:
         self.pending_deletes = []
         self.pending_inserts = []
         self.actions = {}
+        self._gutter_cache.clear()  # indices shifted after deletions
 
         # Re-flag covers/doc_starts from data
         for i, kf in enumerate(self.keyframes):
