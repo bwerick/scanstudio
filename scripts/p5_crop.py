@@ -24,7 +24,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from utils import log, ProjectPaths, check_overwrite, page_mask
+from utils import log, ProjectPaths, check_overwrite, page_mask, resolve_rotation
 
 # ── Double-page crop (books) ─────────────────────────────────
 
@@ -346,7 +346,9 @@ def main():
 
             # Step 2: Otsu page detection
             if not args.no_otsu and not is_cover:
-                rot = kf.get("rotation_deg")
+                # Manual deskew corrections propagate forward to later spreads
+                # (the rig doesn't move between page turns).
+                rot = resolve_rotation(keyframes, i)
                 cropped, method, _ = crop_double_page(img, args.safety_margin, rot)
             else:
                 cropped = img

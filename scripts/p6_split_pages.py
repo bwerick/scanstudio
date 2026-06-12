@@ -19,7 +19,7 @@ from pathlib import Path
 
 import cv2
 
-from utils import log, ProjectPaths, check_overwrite_dir, detect_gutter
+from utils import log, ProjectPaths, check_overwrite_dir, detect_gutter, text_skew
 
 
 def main():
@@ -37,6 +37,11 @@ def main():
         type=int,
         default=92,
         help="JPEG quality for page images (default: 92)",
+    )
+    parser.add_argument(
+        "--no-text-deskew",
+        action="store_true",
+        help="Skip the per-page fine deskew based on text lines",
     )
     args = parser.parse_args()
 
@@ -129,6 +134,23 @@ def main():
 
             for side, half in [("left", left_half), ("right", right_half)]:
                 page_num += 1
+                # Fine deskew per page: the spread-level rotation (p5) levels
+                # the page edge, but text isn't always parallel to it — page
+                # curvature near the spine skews each half differently. Level
+                # the text lines themselves.
+                skew = 0.0
+                if not args.no_text_deskew:
+                    skew = text_skew(half)
+                    if skew:
+                        hh, hw = half.shape[:2]
+                        M = cv2.getRotationMatrix2D((hw / 2, hh / 2), skew, 1.0)
+                        half = cv2.warpAffine(
+                            half,
+                            M,
+                            (hw, hh),
+                            flags=cv2.INTER_LINEAR,
+                            borderValue=(255, 255, 255),
+                        )
                 fn = f"frame{frame_idx:06d}_{side}.jpg"
                 cv2.imwrite(
                     str(paths.pages / fn),
@@ -142,6 +164,7 @@ def main():
                         "filename": fn,
                         "source": kf["filename"],
                         "size": f"{half.shape[1]}x{half.shape[0]}",
+                        "deskew_deg": round(skew, 2),
                     }
                 )
 

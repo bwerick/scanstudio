@@ -149,6 +149,67 @@ def detect_gutter(spread, mask=None, band: float = 0.10) -> int:
     return lo + int(np.argmin(col[lo:hi]))
 
 
+def resolve_rotation(keyframes, idx):
+    """Manual deskew angle (deg) in effect for keyframe ``idx``, or None.
+
+    A rotation correction from review propagates forward: the rig rarely
+    moves between page turns, so once the operator dials in an angle it
+    applies to every following spread until the next correction (or until a
+    reset removes it, at which point the previous correction takes over).
+    Returns the keyframe's own override, else the nearest earlier one, else
+    None (auto-detect)."""
+    for kf in reversed(keyframes[: idx + 1]):
+        rot = kf.get("rotation_deg")
+        if rot is not None:
+            return rot
+    return None
+
+
+def text_skew(page, max_deg: float = 3.0) -> float:
+    """Residual skew (deg) of the text lines in a single page image.
+
+    Projection-profile search: rotate the dark (text) pixels by candidate
+    angles and keep the angle that concentrates them into the sharpest row
+    profile — the squared-bin-count score peaks when lines are horizontal and
+    the gaps between them empty. The result is the angle to pass to
+    ``cv2.getRotationMatrix2D`` to level the text. Returns 0 when the page
+    has too little text to measure."""
+    g = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
+    h, w = g.shape
+    s = min(1.0, 1000.0 / max(h, w, 1))
+    if s < 1.0:
+        g = cv2.resize(g, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
+    # Ignore the outer margins: page edges and gutter shadow are dark, slanted
+    # structures that would otherwise dominate the profile.
+    mh, mw = int(g.shape[0] * 0.07), int(g.shape[1] * 0.07)
+    g = g[mh : g.shape[0] - mh, mw : g.shape[1] - mw]
+    if g.size == 0:
+        return 0.0
+    bw = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+    ys, xs = np.nonzero(bw)
+    if len(ys) < 500:
+        return 0.0
+    if len(ys) > 60000:
+        sel = np.random.default_rng(0).choice(len(ys), 60000, replace=False)
+        ys, xs = ys[sel], xs[sel]
+    x = xs - xs.mean()
+    y = ys - ys.mean()
+
+    def score(a):
+        t = np.radians(a)
+        # y' row of cv2.getRotationMatrix2D, so the best `a` feeds it directly.
+        yr = y * np.cos(t) - x * np.sin(t)
+        hist = np.bincount(((yr - yr.min()) / 2.0).astype(np.int64))
+        hist = hist.astype(np.float64)
+        return float((hist * hist).sum())
+
+    best = 0.0
+    for step, span in ((0.25, max_deg), (0.05, 0.3)):
+        cands = np.arange(best - span, best + span + 1e-9, step)
+        best = float(cands[int(np.argmax([score(a) for a in cands]))])
+    return best if abs(best) >= 0.05 else 0.0
+
+
 def check_overwrite_dir(dir_path: Path) -> bool:
     """Prompt to confirm overwrite if directory has files."""
     if not dir_path.exists():

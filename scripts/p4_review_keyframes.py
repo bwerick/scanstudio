@@ -18,7 +18,8 @@ Keys:
   ⌘S   Save
 
 Cropping and deskew are automatic (Phase 5). G previews that result and lets
-you correct the gutter (split) and rotation per spread.
+you correct the gutter (split) and rotation per spread. A rotation correction
+propagates forward to later spreads until the next correction.
 """
 
 import argparse, json, sys, time, shutil, os
@@ -36,7 +37,7 @@ import tkinter as tk
 from tkinter import messagebox
 from PIL import Image, ImageTk
 
-from utils import log, ProjectPaths, ensure_dir, detect_gutter, page_mask
+from utils import log, ProjectPaths, ensure_dir, detect_gutter, page_mask, resolve_rotation
 from p5_crop import crop_double_page, _spread_tilt
 
 ACTIONS = {
@@ -201,17 +202,15 @@ class ReviewApp:
         self._split_frac = 0.5  # gutter as fraction of cropped spread width
         self._split_rot = None  # deskew angle (deg); None = auto until resolved
         self._split_rot_dirty = False  # True once the operator nudges rotation
+        self._split_rot_src = "auto"  # "manual" / "inherited" / "auto", for the HUD
         self._split_cache_key = None
         self._split_crop = None  # cached cropped BGR preview
         self._split_auto_gutter = 0.5
         self._split_resolved_rot = 0.0
-        self._split_x0 = 0  # left crop offset (px, deskewed frame)
-        self._split_cw = 1  # cropped width (px)
-        self._split_raw_w = 1  # original frame width (px)
         self._split_photo = None  # cached PhotoImage so gutter nudges don't re-resize
         self._split_photo_key = None
         self._split_geom = (0, 0, 1, 1)  # ix0, iy0, dw, dh of the drawn preview
-        self._gutter_cache = {}  # idx -> auto gutter fraction, for the default marker
+        self._gutter_cache = {}  # idx -> split-line endpoints (raw-frame fractions)
 
         # Restore cover/doc_start from keyframe data
         for i, kf in enumerate(self.keyframes):
@@ -526,26 +525,26 @@ class ReviewApp:
                     dash=(6, 4),
                 )
 
-            # Show the gutter (split line) so you can tell at a glance whether a
-            # spread needs adjusting. Solid if you've set an override, dashed if
-            # it's the auto estimate. Press G to tune it.
+            # Show the split line exactly where p6 will cut: computed on the
+            # cropped/deskewed spread (same path as G and Phase 5) and mapped
+            # back onto this raw frame — including the tilt, since the cut is
+            # vertical only in deskewed space. Solid if you've set an
+            # override, dashed if it's the auto estimate. Press G to tune it.
             is_cover = kf.get("is_cover") or self.actions.get(idx) == "cover"
             if not is_cover:
                 has_override = kf.get("gutter") is not None
-                if has_override:
-                    frac = kf.get("gutter_raw", kf["gutter"])
-                else:
-                    frac = self._auto_gutter_frac(idx, img)
-                gx = ix0 + int(dw * frac)
-                self.canvas.create_line(
-                    gx,
-                    iy0,
-                    gx,
-                    iy0 + dh,
-                    fill="#22ff66",
-                    width=2,
-                    dash=() if has_override else (4, 4),
-                )
+                line = self._gutter_line(idx)
+                if line:
+                    (fxa, fya), (fxb, fyb) = line
+                    self.canvas.create_line(
+                        ix0 + fxa * dw,
+                        iy0 + fya * dh,
+                        ix0 + fxb * dw,
+                        iy0 + fyb * dh,
+                        fill="#22ff66",
+                        width=2,
+                        dash=() if has_override else (4, 4),
+                    )
         except Exception as e:
             self.canvas.delete("all")
             self.canvas.create_text(
@@ -640,22 +639,48 @@ class ReviewApp:
         self._show_current()
 
     # ── Split / deskew adjust ──
-    def _auto_gutter_frac(self, idx, disp_img):
-        """Estimate the gutter as a fraction of width for the default marker.
+    def _gutter_line(self, idx):
+        """Split-line endpoints in raw-frame fractional coords, or None.
 
-        Runs on the already-resized display image (cheap, resolution-independent)
-        and caches per frame. This is the at-a-glance indicator; G's preview
-        computes the exact split on the cropped/deskewed spread."""
-        cached = self._gutter_cache.get(idx)
-        if cached is not None:
-            return cached
+        Reproduces the p5→p6 path at reduced resolution: crop + deskew with
+        the resolved rotation (own override, inherited, or auto), take the
+        gutter override or detect it on the crop, then map that vertical line
+        back through the inverse rotation onto the raw frame. The line drawn
+        in review is therefore the line p6 will actually cut, tilt included.
+        Cached per frame; invalidated when an override changes."""
+        if idx in self._gutter_cache:
+            return self._gutter_cache[idx]
+        kf = self.keyframes[idx]
+        line = None
         try:
-            arr = cv2.cvtColor(np.array(disp_img), cv2.COLOR_RGB2BGR)
-            frac = detect_gutter(arr) / max(1, arr.shape[1])
+            img = cv2.imread(str(self.paths.images / kf["filename"]))
+            h, w = img.shape[:2]
+            s = min(1.0, 1200.0 / w)
+            small = (
+                cv2.resize(img, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
+                if s < 1.0
+                else img
+            )
+            sh, sw = small.shape[:2]
+            rot = resolve_rotation(self.keyframes, idx)
+            if rot is None:
+                rot = _spread_tilt(page_mask(small))
+            cropped, _, (x0, cw_) = crop_double_page(small, 0.005, rot)
+            frac = kf.get("gutter")
+            if frac is None:
+                frac = detect_gutter(cropped) / max(1, cropped.shape[1])
+            gx = x0 + frac * cw_
+            M = cv2.getRotationMatrix2D((sw / 2, sh / 2), rot, 1.0)
+            Minv = cv2.invertAffineTransform(M)
+            pts = np.array([[gx, 0, 1], [gx, sh, 1]], dtype=np.float64) @ Minv.T
+            line = (
+                (pts[0, 0] / sw, pts[0, 1] / sh),
+                (pts[1, 0] / sw, pts[1, 1] / sh),
+            )
         except Exception:
-            frac = 0.5
-        self._gutter_cache[idx] = frac
-        return frac
+            line = None
+        self._gutter_cache[idx] = line
+        return line
 
     def _build_split_preview(self, idx):
         """Crop + deskew the frame exactly as p5 will, caching the result.
@@ -676,15 +701,11 @@ class ReviewApp:
             return
         if rot is None:
             rot = _spread_tilt(page_mask(img))
-        cropped, _, (x0, cw) = crop_double_page(img, 0.005, rot)
+        cropped, _, _ = crop_double_page(img, 0.005, rot)
         gw = max(1, cropped.shape[1])
         self._split_resolved_rot = rot
         self._split_crop = cropped
         self._split_auto_gutter = detect_gutter(cropped) / gw
-        # Crop geometry, so a cropped-fraction gutter maps back to the raw frame.
-        self._split_x0 = x0
-        self._split_cw = cw
-        self._split_raw_w = img.shape[1]
         self._split_cache_key = key
 
     def _enter_split(self):
@@ -699,8 +720,16 @@ class ReviewApp:
         # Keep keyboard focus on the root so arrow keys reach the split handler.
         self.root.focus_set()
         self.split_mode = True
-        self._split_rot = kf.get("rotation_deg")
-        self._split_rot_dirty = self._split_rot is not None
+        own = kf.get("rotation_deg")
+        # Baseline angle: this frame's own override, else one inherited from an
+        # earlier correction (it propagates forward), else auto.
+        self._split_rot = resolve_rotation(self.keyframes, idx)
+        self._split_rot_dirty = own is not None
+        self._split_rot_src = (
+            "manual"
+            if own is not None
+            else "inherited" if self._split_rot is not None else "auto"
+        )
         self._split_cache_key = None
         self._build_split_preview(idx)
         # Concretize the baseline angle so [ / ] nudge from the auto value.
@@ -721,6 +750,7 @@ class ReviewApp:
             return
         self._split_rot = (self._split_rot or 0.0) + delta
         self._split_rot_dirty = True
+        self._split_rot_src = "manual"
         self._build_split_preview(self.current_idx)
         self._show_current()
 
@@ -731,9 +761,13 @@ class ReviewApp:
         kf.pop("gutter", None)
         kf.pop("gutter_raw", None)
         kf.pop("rotation_deg", None)
-        self._gutter_cache.pop(self.current_idx, None)
-        self._split_rot = None
+        # Removing a rotation changes what later frames inherit, so drop all
+        # cached split lines, not just this frame's.
+        self._gutter_cache.clear()
+        # An earlier correction may still propagate here after the reset.
+        self._split_rot = resolve_rotation(self.keyframes, self.current_idx)
         self._split_rot_dirty = False
+        self._split_rot_src = "inherited" if self._split_rot is not None else "auto"
         self._split_cache_key = None
         self._build_split_preview(self.current_idx)
         self._split_rot = self._split_resolved_rot
@@ -745,12 +779,13 @@ class ReviewApp:
             return
         kf = self.keyframes[self.current_idx]
         kf["gutter"] = round(self._split_frac, 4)
-        # Map the cropped-fraction gutter back to a fraction of the raw frame so
-        # the default marker can be drawn on the un-cropped review image.
-        raw_x = self._split_x0 + self._split_frac * self._split_cw
-        kf["gutter_raw"] = round(raw_x / max(1, self._split_raw_w), 4)
+        kf.pop("gutter_raw", None)  # legacy field from older sessions
         if self._split_rot_dirty:
             kf["rotation_deg"] = round(self._split_rot, 3)
+            # The new rotation propagates to later frames' default split lines.
+            self._gutter_cache.clear()
+        else:
+            self._gutter_cache.pop(self.current_idx, None)
         self.session_log.append(
             {
                 "time": datetime.now().isoformat(),
@@ -812,7 +847,8 @@ class ReviewApp:
             self.canvas.winfo_width() // 2,
             iy0 + 14,
             text=(
-                f"SPLIT — ←/→ gutter  [ / ] rotate ({self._split_resolved_rot:+.2f}°)  "
+                f"SPLIT — ←/→ gutter  [ / ] rotate "
+                f"({self._split_resolved_rot:+.2f}° {self._split_rot_src})  "
                 f"Enter save  Esc cancel  ⌫ reset   gutter={self._split_frac:.3f}"
             ),
             fill="#22ff66",
