@@ -61,7 +61,7 @@ def draw_overlay(disp, state, motion, smooth, settle_thr, turn_thr,
                  count, paused, flash_text, flash_until):
     h, w = disp.shape[:2]
     # Top status bar
-    cv2.rectangle(disp, (0, 0), (w, 70), (0, 0, 0), -1)
+    cv2.rectangle(disp, (0, 0), (w, 95), (0, 0, 0), -1)
     state_color = {"WAITING": (0, 200, 255), "SETTLED": (0, 220, 0),
                    "TURNING": (0, 140, 255)}.get(state, (200, 200, 200))
     cv2.putText(disp, f"{state}", (15, 30),
@@ -84,9 +84,9 @@ def draw_overlay(disp, state, motion, smooth, settle_thr, turn_thr,
     cv2.putText(disp, f"motion {smooth:4.1f}", (bx, by + 42),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
-    # Help line
-    cv2.putText(disp, "Q quit  U undo  C capture  Space pause",
-                (15, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1)
+    # Help line — in the status bar so it's always visible
+    cv2.putText(disp, "Q quit  |  U undo  |  C capture  |  Space pause",
+                (15, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (160, 160, 160), 1)
 
     # Capture flash
     if time.time() < flash_until and flash_text:
