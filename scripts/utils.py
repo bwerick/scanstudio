@@ -121,7 +121,7 @@ def page_mask(img, sat_max: int = 70, val_min: int = 150) -> "np.ndarray":
     return clean
 
 
-def detect_gutter(spread, mask=None, band: float = 0.10) -> int:
+def detect_gutter(spread, mask=None, band: float = 0.10, prior: float | None = None) -> int:
     """Return the x of the book gutter (spine) in a cropped spread.
 
     The gutter is the shadow valley where the two pages meet: the darkest
@@ -130,6 +130,13 @@ def detect_gutter(spread, mask=None, band: float = 0.10) -> int:
     central ``band`` fraction either side of center, which keeps it from
     latching onto the darker inner-margin shadow of a single page. Falls back
     to the midpoint when no page is found.
+
+    When ``prior`` (a gutter fraction from an earlier manual correction) is
+    given, the search instead narrows to a tight band around it and tracks the
+    spine as the book shifts, rather than scanning the whole center. If that
+    band shows no clear shadow valley — the darkest column is no darker than
+    the band's typical column — it falls back to the prior position, so a faint
+    or hidden spine never drags the line off the operator's hint.
     """
     h, w = spread.shape[:2]
     if mask is None:
@@ -143,10 +150,39 @@ def detect_gutter(spread, mask=None, band: float = 0.10) -> int:
     col = np.where(counts > 0, sums / np.maximum(counts, 1), 255.0)
     col = np.convolve(col, np.ones(15) / 15, mode="same")
 
-    lo, hi = int(w * (0.5 - band)), int(w * (0.5 + band))
+    if prior is not None:
+        center, search = float(np.clip(prior, 0.0, 1.0)), 0.03
+    else:
+        center, search = 0.5, band
+    lo, hi = max(0, int(w * (center - search))), min(w, int(w * (center + search)))
     if hi <= lo:
-        return w // 2
-    return lo + int(np.argmin(col[lo:hi]))
+        return int(round(center * w))
+    seg = col[lo:hi]
+    gx = lo + int(np.argmin(seg))
+
+    # With a prior, only trust the detected valley if it's a real shadow —
+    # clearly darker than the band's median column. Otherwise keep the prior so
+    # a missing/faint spine doesn't pull the line away from the operator's hint.
+    if prior is not None and seg.min() > np.median(seg) - 4.0:
+        return int(round(center * w))
+    return gx
+
+
+def resolve_gutter(keyframes, idx):
+    """Gutter fraction in effect for keyframe ``idx`` as a tracking prior, or None.
+
+    Mirrors ``resolve_rotation``: a manual gutter correction in review
+    propagates forward as a *prior*, not a fixed value — later spreads re-detect
+    the spine in a tight band around it (see ``detect_gutter``), so the line
+    follows the book as it shifts while the operator's hint stays the anchor. A
+    correction therefore becomes the exception rather than the rule. Returns the
+    keyframe's own override, else the nearest earlier one, else None (full auto).
+    """
+    for kf in reversed(keyframes[: idx + 1]):
+        g = kf.get("gutter")
+        if g is not None:
+            return g
+    return None
 
 
 def resolve_rotation(keyframes, idx):

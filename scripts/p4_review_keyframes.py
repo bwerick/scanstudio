@@ -15,11 +15,15 @@ Keys:
   I    Insert frame (video scrubber)
   C    Toggle center guide
   G    Adjust split/rotation (←/→ gutter, [ / ] rotate, Enter save, Esc cancel, ⌫ reset)
+       Also marks the spread Keep — you only tune the split on pages you keep.
   ⌘S   Save
 
 Cropping and deskew are automatic (Phase 5). G previews that result and lets
-you correct the gutter (split) and rotation per spread. A rotation correction
-propagates forward to later spreads until the next correction.
+you correct the gutter (split) and rotation per spread. Both corrections
+propagate forward to later spreads until the next correction: rotation as a
+fixed angle, the gutter as a tracking prior — later spreads re-detect the spine
+in a tight band around your last hint, so it follows the book as it shifts and a
+correction stays the exception, not the rule.
 """
 
 import argparse, json, sys, time, shutil, os
@@ -37,7 +41,15 @@ import tkinter as tk
 from tkinter import messagebox
 from PIL import Image, ImageTk
 
-from utils import log, ProjectPaths, ensure_dir, detect_gutter, page_mask, resolve_rotation
+from utils import (
+    log,
+    ProjectPaths,
+    ensure_dir,
+    detect_gutter,
+    page_mask,
+    resolve_rotation,
+    resolve_gutter,
+)
 from p5_crop import crop_double_page, _spread_tilt
 
 ACTIONS = {
@@ -203,6 +215,7 @@ class ReviewApp:
         self._split_rot = None  # deskew angle (deg); None = auto until resolved
         self._split_rot_dirty = False  # True once the operator nudges rotation
         self._split_rot_src = "auto"  # "manual" / "inherited" / "auto", for the HUD
+        self._split_gutter_src = "auto"  # "manual" / "tracked" / "auto", for the HUD
         self._split_cache_key = None
         self._split_crop = None  # cached cropped BGR preview
         self._split_auto_gutter = 0.5
@@ -528,11 +541,15 @@ class ReviewApp:
             # Show the split line exactly where p6 will cut: computed on the
             # cropped/deskewed spread (same path as G and Phase 5) and mapped
             # back onto this raw frame — including the tilt, since the cut is
-            # vertical only in deskewed space. Solid if you've set an
-            # override, dashed if it's the auto estimate. Press G to tune it.
+            # vertical only in deskewed space. The dash pattern shows where the
+            # line comes from: solid = this spread's own override, long dashes =
+            # tracked from an earlier correction, short dashes = pure auto guess.
+            # Press G to tune it.
             is_cover = kf.get("is_cover") or self.actions.get(idx) == "cover"
             if not is_cover:
-                has_override = kf.get("gutter") is not None
+                own = kf.get("gutter") is not None
+                tracked = (not own) and resolve_gutter(self.keyframes, idx) is not None
+                dash = () if own else (8, 3) if tracked else (4, 4)
                 line = self._gutter_line(idx)
                 if line:
                     (fxa, fya), (fxb, fyb) = line
@@ -543,7 +560,7 @@ class ReviewApp:
                         iy0 + fyb * dh,
                         fill="#22ff66",
                         width=2,
-                        dash=() if has_override else (4, 4),
+                        dash=dash,
                     )
         except Exception as e:
             self.canvas.delete("all")
@@ -668,7 +685,10 @@ class ReviewApp:
             cropped, _, (x0, cw_) = crop_double_page(small, 0.005, rot)
             frac = kf.get("gutter")
             if frac is None:
-                frac = detect_gutter(cropped) / max(1, cropped.shape[1])
+                # No own override: track the spine near the inherited prior (the
+                # nearest earlier correction), else fall back to full auto.
+                prior = resolve_gutter(self.keyframes, idx)
+                frac = detect_gutter(cropped, prior=prior) / max(1, cropped.shape[1])
             gx = x0 + frac * cw_
             M = cv2.getRotationMatrix2D((sw / 2, sh / 2), rot, 1.0)
             Minv = cv2.invertAffineTransform(M)
@@ -705,7 +725,11 @@ class ReviewApp:
         gw = max(1, cropped.shape[1])
         self._split_resolved_rot = rot
         self._split_crop = cropped
-        self._split_auto_gutter = detect_gutter(cropped) / gw
+        # The auto/ghost gutter tracks the prior inherited from earlier spreads
+        # (idx-1, so this frame's own override doesn't seed itself), falling back
+        # to full center detection when there's no earlier correction yet.
+        prior = resolve_gutter(self.keyframes, idx - 1) if idx > 0 else None
+        self._split_auto_gutter = detect_gutter(cropped, prior=prior) / gw
         self._split_cache_key = key
 
     def _enter_split(self):
@@ -717,6 +741,10 @@ class ReviewApp:
         if kf.get("is_cover") or self.actions.get(idx) == "cover":
             messagebox.showinfo("Split", "Covers are not split into pages.")
             return
+        # Tuning a spread's split implies it's a page you're keeping, so adopting
+        # G as a Keep too saves the separate "1" press (and overrides a stale
+        # delete flag on a frame you've now decided to keep).
+        self.actions[idx] = "keep"
         # Keep keyboard focus on the root so arrow keys reach the split handler.
         self.root.focus_set()
         self.split_mode = True
@@ -730,6 +758,13 @@ class ReviewApp:
             if own is not None
             else "inherited" if self._split_rot is not None else "auto"
         )
+        # Gutter baseline source for the HUD: own override, else a prior tracked
+        # from an earlier correction, else pure auto.
+        own_g = kf.get("gutter")
+        prior_g = resolve_gutter(self.keyframes, idx - 1) if idx > 0 else None
+        self._split_gutter_src = (
+            "manual" if own_g is not None else "tracked" if prior_g is not None else "auto"
+        )
         self._split_cache_key = None
         self._build_split_preview(idx)
         # Concretize the baseline angle so [ / ] nudge from the auto value.
@@ -741,6 +776,7 @@ class ReviewApp:
         if not self.split_mode:
             return
         self._split_frac = max(0.05, min(0.95, self._split_frac + delta))
+        self._split_gutter_src = "manual"
         # Only the gutter line moves — redraw the overlay, not the (expensive)
         # base image, so nudging stays responsive on a 4K-ish frame.
         self._draw_split_overlay()
@@ -768,6 +804,9 @@ class ReviewApp:
         self._split_rot = resolve_rotation(self.keyframes, self.current_idx)
         self._split_rot_dirty = False
         self._split_rot_src = "inherited" if self._split_rot is not None else "auto"
+        idx = self.current_idx
+        prior_g = resolve_gutter(self.keyframes, idx - 1) if idx > 0 else None
+        self._split_gutter_src = "tracked" if prior_g is not None else "auto"
         self._split_cache_key = None
         self._build_split_preview(self.current_idx)
         self._split_rot = self._split_resolved_rot
@@ -782,10 +821,10 @@ class ReviewApp:
         kf.pop("gutter_raw", None)  # legacy field from older sessions
         if self._split_rot_dirty:
             kf["rotation_deg"] = round(self._split_rot, 3)
-            # The new rotation propagates to later frames' default split lines.
-            self._gutter_cache.clear()
-        else:
-            self._gutter_cache.pop(self.current_idx, None)
+        # Both the gutter and rotation now propagate forward as defaults, so a
+        # confirm changes every later frame's inherited split line — invalidate
+        # the whole cache, not just this frame's.
+        self._gutter_cache.clear()
         self.session_log.append(
             {
                 "time": datetime.now().isoformat(),
@@ -849,7 +888,8 @@ class ReviewApp:
             text=(
                 f"SPLIT — ←/→ gutter  [ / ] rotate "
                 f"({self._split_resolved_rot:+.2f}° {self._split_rot_src})  "
-                f"Enter save  Esc cancel  ⌫ reset   gutter={self._split_frac:.3f}"
+                f"Enter save  Esc cancel  ⌫ reset   "
+                f"gutter={self._split_frac:.3f} {self._split_gutter_src}"
             ),
             fill="#22ff66",
             font=("Menlo", 10),

@@ -19,7 +19,14 @@ from pathlib import Path
 
 import cv2
 
-from utils import log, ProjectPaths, check_overwrite_dir, detect_gutter, text_skew
+from utils import (
+    log,
+    ProjectPaths,
+    check_overwrite_dir,
+    detect_gutter,
+    resolve_gutter,
+    text_skew,
+)
 
 
 def main():
@@ -74,7 +81,7 @@ def main():
     page_list = []
     page_num = 0
 
-    for kf in keyframes:
+    for i, kf in enumerate(keyframes):
         img_path = paths.images / kf["filename"]
         if not img_path.exists():
             log(f"  WARNING: {kf['filename']} not found")
@@ -124,10 +131,16 @@ def main():
                 continue
             h, w = img.shape[:2]
             # Split at the gutter (spine), not the blind midpoint, so an off-center
-            # or translated spread still divides cleanly between pages. A manual
-            # override from Phase 4 (fraction of width) wins over auto-detection.
-            gutter = kf.get("gutter")
-            mid = int(round(w * gutter)) if gutter is not None else detect_gutter(img)
+            # or translated spread still divides cleanly between pages. This
+            # frame's own Phase 4 override (fraction of width) is used exactly; on
+            # frames without one, a correction on an earlier spread propagates
+            # forward as a prior and the spine is tracked in a tight band around
+            # it, so manual corrections stay the exception.
+            own = kf.get("gutter")
+            if own is not None:
+                mid = int(round(w * own))
+            else:
+                mid = detect_gutter(img, prior=resolve_gutter(keyframes, i))
             mid = max(1, min(w - 1, mid))
             left_half = img[:, :mid]
             right_half = img[:, mid:]
