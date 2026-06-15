@@ -22,10 +22,12 @@ Keys (in the live window):
   U         Undo last capture
   C         Force-capture the current frame now
   Space     Pause / resume auto-capture
+  M         Toggle capture sound mute
 """
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 from collections import deque
@@ -58,7 +60,7 @@ def build_spreads(peaks, total_len, fps):
 
 
 def draw_overlay(disp, state, motion, smooth, settle_thr, turn_thr,
-                 count, paused, flash_text, flash_until):
+                 count, paused, flash_text, flash_until, muted=False):
     h, w = disp.shape[:2]
     # Top status bar
     cv2.rectangle(disp, (0, 0), (w, 95), (0, 0, 0), -1)
@@ -85,7 +87,8 @@ def draw_overlay(disp, state, motion, smooth, settle_thr, turn_thr,
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
     # Help line — in the status bar so it's always visible
-    cv2.putText(disp, "Q quit  |  U undo  |  C capture  |  Space pause",
+    mute_label = "M unmute" if muted else "M mute"
+    cv2.putText(disp, f"Q quit  |  U undo  |  C capture  |  Space pause  |  {mute_label}",
                 (15, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (160, 160, 160), 1)
 
     # Capture flash
@@ -154,7 +157,15 @@ def main():
     saw_turn = False
     turn_frames = []            # frame index of each detected page turn (for peaks.npy)
     paused = False
+    muted = False
     flash_text, flash_until = "", 0.0
+
+    def play_ding():
+        if not muted:
+            subprocess.Popen(
+                ["afplay", "/System/Library/Sounds/Glass.aiff"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
 
     def commit_capture(reason):
         nonlocal flash_text, flash_until
@@ -180,6 +191,7 @@ def main():
         flash_until = time.time() + 0.8
         log(f"  Captured #{len(keyframes)}: frame {fi} "
             f"(sharp={best_sharp:.0f}, {reason})")
+        play_ding()
 
     def undo_capture():
         nonlocal flash_text, flash_until
@@ -237,7 +249,7 @@ def main():
 
         disp = draw_overlay(frame.copy(), state, motion, smooth,
                             args.settle_threshold, args.turn_threshold,
-                            len(keyframes), paused, flash_text, flash_until)
+                            len(keyframes), paused, flash_text, flash_until, muted)
         cv2.imshow(win, disp)
 
         key = cv2.waitKey(1) & 0xFF
@@ -252,6 +264,9 @@ def main():
         elif key == ord(" "):
             paused = not paused
             still_run = 0
+        elif key == ord("m"):
+            muted = not muted
+            log(f"  Sound {'muted' if muted else 'unmuted'}")
 
     cap.release()
     writer.release()
