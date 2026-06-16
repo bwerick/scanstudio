@@ -121,22 +121,45 @@ def page_mask(img, sat_max: int = 70, val_min: int = 150) -> "np.ndarray":
     return clean
 
 
+def book_center_x(mask) -> float | None:
+    """Fraction (0–1) of the book's horizontal centre from a page mask.
+
+    The mean of the left and right page edges, taken row by row and reduced by
+    median so a slight rotation, page curl, or a hand clipping one edge doesn't
+    skew it. This is where the spine sits on a symmetric spread — the same
+    midpoint an operator eyeballs by halving the distance between the two outer
+    edges. Returns None for an empty mask.
+    """
+    m = mask > 0
+    rows = m.any(axis=1)
+    if not rows.any():
+        return None
+    w = mask.shape[1]
+    left = m.argmax(axis=1)                       # first page column per row
+    right = (w - 1) - m[:, ::-1].argmax(axis=1)   # last page column per row
+    mids = (left[rows] + right[rows]) / 2.0
+    return float(np.median(mids)) / w
+
+
 def detect_gutter(spread, mask=None, band: float = 0.10, prior: float | None = None) -> int:
     """Return the x of the book gutter (spine) in a cropped spread.
 
     The gutter is the shadow valley where the two pages meet: the darkest
-    column near the center, measured over page pixels only (so the dark table
+    column near the centre, measured over page pixels only (so the dark table
     above/below doesn't drag the average). The search is limited to the
-    central ``band`` fraction either side of center, which keeps it from
-    latching onto the darker inner-margin shadow of a single page. Falls back
-    to the midpoint when no page is found.
+    central ``band`` fraction either side of an anchor, which keeps it from
+    latching onto the darker inner-margin shadow of a single page.
 
-    When ``prior`` (a gutter fraction from an earlier manual correction) is
-    given, the search instead narrows to a tight band around it and tracks the
-    spine as the book shifts, rather than scanning the whole center. If that
-    band shows no clear shadow valley — the darkest column is no darker than
-    the band's typical column — it falls back to the prior position, so a faint
-    or hidden spine never drags the line off the operator's hint.
+    The anchor is the book's geometric centre — the mean of its left and right
+    edges (see ``book_center_x``), the same midpoint an operator eyeballs when
+    the spine is faint. When ``prior`` (a gutter fraction from an earlier manual
+    correction) is given, the anchor is the prior instead and the band tightens
+    to track the spine as the book shifts.
+
+    Either way the detected valley is only trusted when it's a real shadow —
+    clearly darker than the band's typical column. If it isn't (a flat or hidden
+    spine), the line falls back to the anchor rather than drifting toward a text
+    block edge, which is what would otherwise pull the line too far left or right.
     """
     h, w = spread.shape[:2]
     if mask is None:
@@ -153,17 +176,19 @@ def detect_gutter(spread, mask=None, band: float = 0.10, prior: float | None = N
     if prior is not None:
         center, search = float(np.clip(prior, 0.0, 1.0)), 0.03
     else:
-        center, search = 0.5, band
+        gc = book_center_x(mask)
+        center, search = (0.5 if gc is None else gc), band
     lo, hi = max(0, int(w * (center - search))), min(w, int(w * (center + search)))
     if hi <= lo:
         return int(round(center * w))
     seg = col[lo:hi]
     gx = lo + int(np.argmin(seg))
 
-    # With a prior, only trust the detected valley if it's a real shadow —
-    # clearly darker than the band's median column. Otherwise keep the prior so
-    # a missing/faint spine doesn't pull the line away from the operator's hint.
-    if prior is not None and seg.min() > np.median(seg) - 4.0:
+    # Trust the detected valley only if it's a real shadow — clearly darker than
+    # the band's median column. Otherwise keep the anchor (the prior hint, else
+    # the book's geometric centre) so a missing or flat spine never drags the
+    # line off toward a text-block edge.
+    if seg.min() > np.median(seg) - 4.0:
         return int(round(center * w))
     return gx
 
