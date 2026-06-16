@@ -141,29 +141,31 @@ def book_center_x(mask) -> float | None:
     return float(np.median(mids)) / w
 
 
-def detect_gutter(spread, mask=None, band: float = 0.10, prior: float | None = None) -> int:
+def detect_gutter(spread, mask=None, prior: float | None = None) -> int:
     """Return the x of the book gutter (spine) in a cropped spread.
 
-    The gutter is the shadow valley where the two pages meet: the darkest
-    column near the centre, measured over page pixels only (so the dark table
-    above/below doesn't drag the average). The search is limited to the
-    central ``band`` fraction either side of an anchor, which keeps it from
-    latching onto the darker inner-margin shadow of a single page.
+    A bound book's two pages are equal width, so the spine sits at the book's
+    geometric centre — the mean of its left and right edges (see
+    ``book_center_x``), the midpoint an operator eyeballs by halving the gap
+    between the outer edges. With no prior hint this *is* the answer: it tracks
+    the book as it shifts and is far steadier than the shadow valley between the
+    pages, which is faint when the book lies flat. A per-column brightness scan
+    latches onto a text-block edge or a left/right page-brightness gradient just
+    as readily as the spine, so trusting it tends to drag the line into a page.
 
-    The anchor is the book's geometric centre — the mean of its left and right
-    edges (see ``book_center_x``), the same midpoint an operator eyeballs when
-    the spine is faint. When ``prior`` (a gutter fraction from an earlier manual
-    correction) is given, the anchor is the prior instead and the band tightens
-    to track the spine as the book shifts.
-
-    Either way the detected valley is only trusted when it's a real shadow —
-    clearly darker than the band's typical column. If it isn't (a flat or hidden
-    spine), the line falls back to the anchor rather than drifting toward a text
-    block edge, which is what would otherwise pull the line too far left or right.
+    When ``prior`` (a gutter fraction from an earlier manual correction) is
+    given, the line pins to it and a tight shadow scan tracks the spine as the
+    book drifts, but only follows a column that is a genuine shadow — at least
+    ~6% darker than the band's typical column. A faint or flat dip is ignored
+    and the operator's hint holds.
     """
     h, w = spread.shape[:2]
     if mask is None:
         mask = page_mask(spread)
+
+    if prior is None:
+        gc = book_center_x(mask)
+        return int(round((0.5 if gc is None else gc) * w))
 
     gray = cv2.cvtColor(spread, cv2.COLOR_BGR2GRAY).astype(np.float32)
     mb = mask > 0
@@ -173,24 +175,20 @@ def detect_gutter(spread, mask=None, band: float = 0.10, prior: float | None = N
     col = np.where(counts > 0, sums / np.maximum(counts, 1), 255.0)
     col = np.convolve(col, np.ones(15) / 15, mode="same")
 
-    if prior is not None:
-        center, search = float(np.clip(prior, 0.0, 1.0)), 0.03
-    else:
-        gc = book_center_x(mask)
-        center, search = (0.5 if gc is None else gc), band
-    lo, hi = max(0, int(w * (center - search))), min(w, int(w * (center + search)))
+    center = float(np.clip(prior, 0.0, 1.0))
+    cx = int(round(center * w))
+    lo, hi = max(0, int(w * (center - 0.03))), min(w, int(w * (center + 0.03)))
     if hi <= lo:
-        return int(round(center * w))
+        return cx
     seg = col[lo:hi]
-    gx = lo + int(np.argmin(seg))
+    vx = lo + int(np.argmin(seg))
 
-    # Trust the detected valley only if it's a real shadow — clearly darker than
-    # the band's median column. Otherwise keep the anchor (the prior hint, else
-    # the book's geometric centre) so a missing or flat spine never drags the
-    # line off toward a text-block edge.
-    if seg.min() > np.median(seg) - 4.0:
-        return int(round(center * w))
-    return gx
+    # Track the spine only via a genuine shadow, not a text-density dip. Real
+    # gutters run ~6–10% below the band's median brightness; false valleys only
+    # ~2–3%, so this relative test (which also scales with exposure) rejects
+    # them and keeps the operator's hint.
+    median = float(np.median(seg))
+    return vx if (median - float(seg.min())) >= 0.06 * median else cx
 
 
 def resolve_gutter(keyframes, idx):
