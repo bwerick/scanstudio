@@ -659,12 +659,19 @@ class ReviewApp:
     def _gutter_line(self, idx):
         """Split-line endpoints in raw-frame fractional coords, or None.
 
-        Reproduces the p5→p6 path at reduced resolution: crop + deskew with
-        the resolved rotation (own override, inherited, or auto), take the
-        gutter override or detect it on the crop, then map that vertical line
-        back through the inverse rotation onto the raw frame. The line drawn
-        in review is therefore the line p6 will actually cut, tilt included.
-        Cached per frame; invalidated when an override changes."""
+        Reproduces the p5→p6 path at full resolution: crop + deskew with the
+        resolved rotation (own override, inherited, or auto), take the gutter
+        override or detect it on the crop, then map that vertical line back
+        through the inverse rotation onto the raw frame. The line drawn in
+        review is therefore the line p6 will actually cut, tilt included.
+
+        Must use the same full-resolution crop as ``_build_split_preview``: the
+        page mask, tilt, and bounds are resolution-dependent (a downscale can
+        even flip ``crop_double_page`` into its whole-frame fallback when the
+        spread doesn't fill the frame), so cropping a downscaled copy here would
+        land the green line in a different place than the split editor shows for
+        the same gutter fraction. Cached per frame; invalidated when an override
+        changes."""
         if idx in self._gutter_cache:
             return self._gutter_cache[idx]
         kf = self.keyframes[idx]
@@ -672,17 +679,10 @@ class ReviewApp:
         try:
             img = cv2.imread(str(self.paths.images / kf["filename"]))
             h, w = img.shape[:2]
-            s = min(1.0, 1200.0 / w)
-            small = (
-                cv2.resize(img, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
-                if s < 1.0
-                else img
-            )
-            sh, sw = small.shape[:2]
             rot = resolve_rotation(self.keyframes, idx)
             if rot is None:
-                rot = _spread_tilt(page_mask(small))
-            cropped, _, (x0, cw_) = crop_double_page(small, 0.005, rot)
+                rot = _spread_tilt(page_mask(img))
+            cropped, _, (x0, cw_) = crop_double_page(img, 0.005, rot)
             frac = kf.get("gutter")
             if frac is None:
                 # No own override: track the spine near the inherited prior (the
@@ -690,12 +690,12 @@ class ReviewApp:
                 prior = resolve_gutter(self.keyframes, idx)
                 frac = detect_gutter(cropped, prior=prior) / max(1, cropped.shape[1])
             gx = x0 + frac * cw_
-            M = cv2.getRotationMatrix2D((sw / 2, sh / 2), rot, 1.0)
+            M = cv2.getRotationMatrix2D((w / 2, h / 2), rot, 1.0)
             Minv = cv2.invertAffineTransform(M)
-            pts = np.array([[gx, 0, 1], [gx, sh, 1]], dtype=np.float64) @ Minv.T
+            pts = np.array([[gx, 0, 1], [gx, h, 1]], dtype=np.float64) @ Minv.T
             line = (
-                (pts[0, 0] / sw, pts[0, 1] / sh),
-                (pts[1, 0] / sw, pts[1, 1] / sh),
+                (pts[0, 0] / w, pts[0, 1] / h),
+                (pts[1, 0] / w, pts[1, 1] / h),
             )
         except Exception:
             line = None
