@@ -31,6 +31,7 @@ BLOCK_SIZE    ?= 51
 BW_OFFSET     ?= 10
 BW_METHOD     ?= sauvola
 BW_UPSCALE    ?= 2
+BW_K          ?= 0.2
 MODE          ?= double
 CAMERA        ?= 0
 SETTLE        ?= 2.0
@@ -63,7 +64,7 @@ help:
 	@echo "  clean         Delete output/<NAME>/ (VIDEO= or NAME=; keeps recording)"
 	@echo ""
 	@echo "  SAFETY_MARGIN=$(SAFETY_MARGIN)  BLOCK_SIZE=$(BLOCK_SIZE)  BW_OFFSET=$(BW_OFFSET)"
-	@echo "  BW_METHOD=$(BW_METHOD) (sauvola|adaptive)  BW_UPSCALE=$(BW_UPSCALE)"
+	@echo "  BW_METHOD=$(BW_METHOD) (sauvola|adaptive)  BW_UPSCALE=$(BW_UPSCALE)  BW_K=$(BW_K) (higher=thinner)"
 	@echo "  MODE=$(MODE)  (double=book spreads, single=loose docs)"
 	@echo "  live: CAMERA=$(CAMERA)  SETTLE=$(SETTLE)  TURN=$(TURN)  SETTLE_TIME=$(SETTLE_TIME)"
 
@@ -119,7 +120,7 @@ page-review: $(PAGES)
 
 binarize: $(BW_META)
 $(BW_META): $(PAGES)
-	python $(SCRIPTS)/p8_binarize.py $(OUTDIR) --method $(BW_METHOD) --block-size $(BLOCK_SIZE) --offset $(BW_OFFSET) --upscale $(BW_UPSCALE)
+	python $(SCRIPTS)/p8_binarize.py $(OUTDIR) --method $(BW_METHOD) --block-size $(BLOCK_SIZE) --offset $(BW_OFFSET) --upscale $(BW_UPSCALE) --sauvola-k $(BW_K)
 
 pdf: $(PDF)
 $(PDF): $(PAGES)

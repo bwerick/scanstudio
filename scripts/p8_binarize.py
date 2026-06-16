@@ -46,8 +46,8 @@ def main():
     parser.add_argument("--block-size", type=int, default=51)
     parser.add_argument("--offset", type=int, default=10,
                         help="adaptive only: threshold bias")
-    parser.add_argument("--sauvola-k", type=float, default=0.1,
-                        help="sauvola only: lower = bolder/more ink kept")
+    parser.add_argument("--sauvola-k", type=float, default=0.2,
+                        help="sauvola only: higher = thinner strokes, lower = bolder")
     parser.add_argument("--upscale", type=float, default=2.0,
                         help="grayscale upscale before thresholding (anti-aliases edges)")
     args = parser.parse_args()
