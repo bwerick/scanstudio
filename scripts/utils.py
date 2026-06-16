@@ -71,6 +71,24 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
+def bring_to_front(root):
+    """Force a Tk window to the foreground and grab keyboard focus.
+
+    On macOS, Tk windows open behind the active app and never steal focus, so a
+    review GUI launched mid-pipeline (e.g. P7, which opens only after the long
+    crop/split phase when attention has wandered to another window) can come up
+    hidden and be dismissed unseen. Lifting, briefly pinning ``-topmost``, then
+    forcing focus makes the window unmissable without leaving it permanently
+    above everything else.
+    """
+    root.update_idletasks()
+    root.deiconify()
+    root.lift()
+    root.attributes("-topmost", True)
+    root.after(800, lambda: root.attributes("-topmost", False))
+    root.focus_force()
+
+
 def check_overwrite(path: Path) -> bool:
     """Prompt to confirm overwrite if path exists."""
     if not path.exists():

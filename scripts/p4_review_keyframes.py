@@ -49,6 +49,7 @@ from utils import (
     page_mask,
     resolve_rotation,
     resolve_gutter,
+    bring_to_front,
 )
 from p5_crop import crop_double_page, _spread_tilt
 
@@ -1027,6 +1028,7 @@ def main():
 
     root = tk.Tk()
     app = ReviewApp(root, args.output_dir, args.video)
+    bring_to_front(root)
     root.mainloop()
 
 

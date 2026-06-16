@@ -11,7 +11,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import messagebox
 from PIL import Image, ImageTk
-from utils import log, ProjectPaths, ensure_dir
+from utils import log, ProjectPaths, ensure_dir, bring_to_front
 
 FLAGS = {"great": {"color":"#22c55e","label":"Great","key":"1"}, "acceptable": {"color":"#3b82f6","label":"Acceptable","key":"2"},
          "poor": {"color":"#f59e0b","label":"Poor","key":"3"}, "crop_issue": {"color":"#ef4444","label":"Crop issue","key":"4"}}
@@ -159,6 +159,6 @@ class PageReviewApp:
 def main():
     parser=argparse.ArgumentParser();parser.add_argument("output_dir")
     args=parser.parse_args()
-    root=tk.Tk();PageReviewApp(root,args.output_dir);root.mainloop()
+    root=tk.Tk();PageReviewApp(root,args.output_dir);bring_to_front(root);root.mainloop()
 
 if __name__=="__main__":main()
