@@ -59,8 +59,17 @@ def build_spreads(peaks, total_len, fps):
             for i, (s, e) in enumerate(bounds)]
 
 
+def resolution_label(w, h):
+    """Short, friendly name for a capture resolution (e.g. '4K', '1080p')."""
+    for std_h, name in ((2160, "4K"), (1440, "1440p"), (1080, "1080p"),
+                        (720, "720p"), (480, "480p")):
+        if abs(h - std_h) <= 16:
+            return name
+    return f"{h}p"
+
+
 def draw_overlay(disp, state, motion, smooth, settle_thr, turn_thr,
-                 count, paused, flash_text, flash_until, muted=False):
+                 count, paused, flash_text, flash_until, muted=False, res_label=""):
     h, w = disp.shape[:2]
     # Top status bar
     cv2.rectangle(disp, (0, 0), (w, 95), (0, 0, 0), -1)
@@ -73,6 +82,12 @@ def draw_overlay(disp, state, motion, smooth, settle_thr, turn_thr,
     if paused:
         cv2.putText(disp, "PAUSED", (w - 130, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+    # Recording resolution — persistent, right-aligned so it reads at a glance
+    if res_label:
+        res_text = f"{res_label}  {w}x{h}"
+        (tw, _), _ = cv2.getTextSize(res_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+        cv2.putText(disp, res_text, (w - tw - 15, 58),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
     # Motion bar (maps motion onto a fixed scale relative to turn threshold)
     bx, by, bw = 220, 22, w - 420
@@ -197,7 +212,9 @@ def main():
             f"that mode — run `make probe-camera` to see what each one supports.")
     scale = args.analysis_height / orig_h
     aw = int(orig_w * scale)
-    log(f"Camera {args.camera}: {orig_w}x{orig_h}  analysis {aw}x{args.analysis_height}")
+    res_label = resolution_label(orig_w, orig_h)
+    log(f"Camera {args.camera}: {orig_w}x{orig_h} ({res_label})  "
+        f"analysis {aw}x{args.analysis_height}")
     log(f"Recording to {args.video_out}")
     log(f"Thresholds: settle<{args.settle_threshold} turn>{args.turn_threshold}, "
         f"settle_time={args.settle_time}s")
@@ -312,7 +329,8 @@ def main():
 
         disp = draw_overlay(frame.copy(), state, motion, smooth,
                             args.settle_threshold, args.turn_threshold,
-                            len(keyframes), paused, flash_text, flash_until, muted)
+                            len(keyframes), paused, flash_text, flash_until, muted,
+                            res_label)
         cv2.imshow(win, disp)
 
         key = cv2.waitKey(1) & 0xFF
