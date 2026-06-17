@@ -240,9 +240,45 @@ def post_recording_analysis(video_path: str):
 # ---------------------------
 
 
+def open_best_camera(backend, want_w, want_h, fps, max_scan=5):
+    """Open the camera that best delivers ``want_w`` x ``want_h``.
+
+    USB camera indices shuffle on reconnect, so rather than trust a fixed index
+    we scan and take the first camera that meets the requested resolution (else
+    the highest-res one found). Returns ``(cap, index, w, h)`` or
+    ``(None, -1, 0, 0)``.
+    """
+    best = None  # (area, cap, idx, w, h)
+    for idx in range(max_scan):
+        cap = cv2.VideoCapture(idx, backend)
+        if not cap.isOpened():
+            continue
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(want_w))
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(want_h))
+        cap.set(cv2.CAP_PROP_FPS, float(fps))
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            cap.release()
+            continue
+        w, h = frame.shape[1], frame.shape[0]
+        if w >= want_w and h >= want_h:
+            if best is not None:
+                best[1].release()
+            return cap, idx, w, h
+        if best is None or w * h > best[0]:
+            if best is not None:
+                best[1].release()
+            best = (w * h, cap, idx, w, h)
+        else:
+            cap.release()
+    if best is None:
+        return None, -1, 0, 0
+    return best[1], best[2], best[3], best[4]
+
+
 def main():
     # Camera + recording defaults
-    camera_index = 0
     backend = cv2.CAP_AVFOUNDATION
 
     req_w, req_h = 3840, 2160
@@ -272,19 +308,16 @@ def main():
     # Blur thresholds
     blur_thresh = 120.0
 
-    # Open camera
-    cap = cv2.VideoCapture(camera_index, backend)
-    if not cap.isOpened():
-        raise RuntimeError(f"Failed to open camera {camera_index}")
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(req_w))
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(req_h))
-    cap.set(cv2.CAP_PROP_FPS, float(req_fps))
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    # Open camera (auto-pick: USB indices shuffle on reconnect)
+    cap, camera_index, actual_w, actual_h = open_best_camera(
+        backend, req_w, req_h, req_fps
+    )
+    if cap is None:
+        raise RuntimeError("Failed to open any camera")
     reported_fps = cap.get(cv2.CAP_PROP_FPS)
+    if (actual_w, actual_h) != (req_w, req_h):
+        print(f"WARNING: got {actual_w}x{actual_h}, not {req_w}x{req_h}. "
+              f"Run scripts/probe_camera.py to check each camera's modes.")
 
     # Video writer
     writer = None

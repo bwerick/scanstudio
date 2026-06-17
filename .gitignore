@@ -247,8 +247,6 @@ frame_labeler.py
 ncc_diagnostic.py
 probe_cam0.py
 
-probe_camera.py
-
 record_test_4k.py
 video_book_scanner.py
 whuch_cam.py

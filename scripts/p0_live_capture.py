@@ -98,11 +98,74 @@ def draw_overlay(disp, state, motion, smooth, settle_thr, turn_thr,
     return disp
 
 
+def open_camera(requested, want_w, want_h, fps):
+    """Open the capture camera at ``want_w``x``want_h``; return (cap, w, h).
+
+    USB camera indices shuffle as devices connect/disconnect (Continuity Camera,
+    the built-in FaceTime cam, external webcams), so a fixed index is unreliable.
+    ``requested="auto"`` scans indices and takes the first that actually delivers
+    the requested resolution, falling back to the highest-resolution camera
+    found. Pass an integer to force a specific index. Returns ``(None, 0, 0)`` if
+    nothing opens.
+    """
+    # macOS exposes a webcam's high-res modes only through AVFoundation; the
+    # default backend silently tops out at 1080p on some cameras.
+    backend = cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_ANY
+
+    def try_open(idx):
+        cap = cv2.VideoCapture(idx, backend)
+        if not cap.isOpened():
+            return None
+        # Request the capture mode *before* the first read; a UVC camera
+        # negotiates to its nearest supported mode, so read back what we got.
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(want_w))
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(want_h))
+        cap.set(cv2.CAP_PROP_FPS, float(fps))
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            cap.release()
+            return None
+        return cap, frame.shape[1], frame.shape[0]
+
+    if str(requested) != "auto":
+        return try_open(int(requested)) or (None, 0, 0)
+
+    best = None  # (area, cap, w, h, idx)
+    for idx in range(5):
+        opened = try_open(idx)
+        if opened is None:
+            continue
+        cap, w, h = opened
+        if w >= want_w and h >= want_h:   # meets the request — take it, stop scanning
+            if best is not None:
+                best[1].release()
+            log(f"  Auto-selected camera {idx}: {w}x{h}")
+            return cap, w, h
+        if best is None or w * h > best[0]:
+            if best is not None:
+                best[1].release()
+            best = (w * h, cap, w, h, idx)
+        else:
+            cap.release()
+    if best is None:
+        return None, 0, 0
+    log(f"  Auto-selected camera {best[4]}: {best[2]}x{best[3]} "
+        f"(none met {want_w}x{want_h})")
+    return best[1], best[2], best[3]
+
+
 def main():
     p = argparse.ArgumentParser(description="Phase 0: Live webcam capture")
     p.add_argument("output_dir", help="Base output directory (e.g. output/mybook)")
     p.add_argument("video_out", help="Path to write the recording (e.g. recordings/mybook.mp4)")
-    p.add_argument("--camera", type=int, default=0, help="Camera index")
+    p.add_argument("--camera", default="auto",
+                   help="Camera index, or 'auto' to pick whichever delivers the "
+                        "requested resolution (USB indices shuffle on reconnect)")
+    p.add_argument("--capture-width", type=int, default=3840,
+                   help="Requested capture width (default 3840 = 4K UHD)")
+    p.add_argument("--capture-height", type=int, default=2160,
+                   help="Requested capture height (default 2160 = 4K UHD)")
     p.add_argument("--fps", type=float, default=30.0, help="Recording / timing fps")
     p.add_argument("--analysis-height", type=int, default=360)
     p.add_argument("--smoothing-window", type=int, default=15)
@@ -112,7 +175,8 @@ def main():
                    help="Motion above this counts as a page turn")
     p.add_argument("--settle-time", type=float, default=0.4,
                    help="Seconds of stillness required before capturing")
-    p.add_argument("--jpeg-quality", type=int, default=95)
+    p.add_argument("--jpeg-quality", type=int, default=95,
+                   help="JPEG quality for captured keyframes (one near-lossless generation)")
     args = p.parse_args()
 
     log("=" * 60)
@@ -122,16 +186,15 @@ def main():
     paths = ProjectPaths(args.output_dir)
     paths.ensure("images", "json", "data", "plots")
 
-    cap = cv2.VideoCapture(args.camera)
-    if not cap.isOpened():
+    cap, orig_w, orig_h = open_camera(args.camera, args.capture_width,
+                                      args.capture_height, args.fps)
+    if cap is None:
         log(f"ERROR: Cannot open camera {args.camera}")
         sys.exit(1)
-    ret, frame = cap.read()
-    if not ret:
-        log("ERROR: Camera opened but returned no frame")
-        sys.exit(1)
-
-    orig_h, orig_w = frame.shape[:2]
+    if (orig_w, orig_h) != (args.capture_width, args.capture_height):
+        log(f"WARNING: got {orig_w}x{orig_h}, not the requested "
+            f"{args.capture_width}x{args.capture_height}. No connected camera offers "
+            f"that mode — run `make probe-camera` to see what each one supports.")
     scale = args.analysis_height / orig_h
     aw = int(orig_w * scale)
     log(f"Camera {args.camera}: {orig_w}x{orig_h}  analysis {aw}x{args.analysis_height}")

@@ -42,8 +42,8 @@ def main():
     parser.add_argument(
         "--jpeg-quality",
         type=int,
-        default=92,
-        help="JPEG quality for page images (default: 92)",
+        default=95,
+        help="JPEG quality for page images (default: 95 — the binarizer's input)",
     )
     parser.add_argument(
         "--no-text-deskew",

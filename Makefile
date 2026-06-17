@@ -5,7 +5,7 @@
 #   make review VIDEO=recordings/mybook.mp4
 #   make pdf VIDEO=recordings/mybook.mp4
 
-ifeq ($(filter install help live clean tkinter,$(MAKECMDGOALS)),)
+ifeq ($(filter install help live clean tkinter probe-camera,$(MAKECMDGOALS)),)
 ifndef VIDEO
 $(error VIDEO is required. Usage: make all VIDEO=recordings/mybook.mp4)
 endif
@@ -33,12 +33,14 @@ BW_METHOD     ?= sauvola
 BW_UPSCALE    ?= 2
 BW_K          ?= 0.2
 MODE          ?= double
-CAMERA        ?= 0
+# 'auto' picks whichever camera delivers the requested 4K mode (USB indices
+# shift on reconnect). Set CAMERA=<n> to force one; `make probe-camera` lists them.
+CAMERA        ?= auto
 SETTLE        ?= 2.0
 TURN          ?= 5.0
 SETTLE_TIME   ?= 0.4
 
-.PHONY: all bw live finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install tkinter help
+.PHONY: all bw live finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install tkinter probe-camera help
 
 help:
 	@echo "ScanStudio Pipeline"
@@ -48,6 +50,7 @@ help:
 	@echo "  all           Full pipeline (pauses at review)"
 	@echo "  bw            Binarize + B&W PDF"
 	@echo "  live          P0: Live webcam capture (make live NAME=mybook)"
+	@echo "  probe-camera  List camera indices and which one delivers 4K"
 	@echo "  finish        P4-P9 back half (run after 'live')"
 	@echo ""
 	@echo "  motion        P1: Motion signal"
@@ -129,6 +132,9 @@ $(PDF): $(PAGES)
 pdf-bw: $(PDF_BW)
 $(PDF_BW): $(BW_META)
 	python $(SCRIPTS)/p9_build_pdf.py $(OUTDIR) --source bw --pdf-name $(NAME)_bw.pdf
+
+probe-camera:
+	python $(SCRIPTS)/probe_camera.py
 
 install: tkinter
 	pip install -r requirements.txt

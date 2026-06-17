@@ -356,7 +356,8 @@ def main():
 
         method_counts[method] = method_counts.get(method, 0) + 1
 
-        # Save in-place
+        # Save in-place. High-quality JPEG: this is the binarizer's eventual
+        # source, so keep one near-lossless generation rather than stacking many.
         cv2.imwrite(
             str(img_path), cropped, [cv2.IMWRITE_JPEG_QUALITY, args.jpeg_quality]
         )

@@ -26,7 +26,7 @@ make install
 make all VIDEO=recordings/mybook.mp4
 ```
 
-Either way, the pipeline pauses twice for interactive review (P4 and P7), and the finished PDF lands at `output/mybook/pdf/book.pdf`.
+Either way, the pipeline pauses twice for interactive review (P4 and P7), and the finished PDF lands at `output/mybook/pdf/mybook.pdf`.
 
 ## Overview
 
@@ -56,7 +56,7 @@ Two modes are supported via `MODE=`:
 - **macOS 13 Ventura or later** recommended
 - **Python 3.10+** — the pipeline uses union type syntax (`str | None`) introduced in 3.10
 - **RAM** — 16 GB recommended; 8 GB workable for shorter or lower-resolution videos. P3 holds full-resolution keyframes in memory during extraction.
-- **Storage** — plan for 3–10 GB per book depending on video resolution and length (raw video + one full-res image per page in `images/` and `pages/`)
+- **Storage** — plan for 10+ GB per book at 4K (the default capture resolution; the raw recording dominates), less at 1080p, plus one image per page in `images/` and `pages/`
 - **Apple Silicon (M1 or later)** — not required for the core pipeline, but significantly faster for the torch-based legacy scripts (`featurize.py`, `ocr.py`, `yolo.py`)
 
 **tkinter note:** P4 and P7 use tkinter for their GUIs. If you installed Python via Homebrew and tkinter is missing, run:
@@ -92,7 +92,7 @@ output/<name>/
 ├── data/       # raw signal arrays (.npy)
 ├── json/       # metadata, keyframe list, review logs
 ├── reports/    # markdown and text reports
-└── pdf/        # book.pdf and book_bw.pdf
+└── pdf/        # <name>.pdf and <name>_bw.pdf
 ```
 
 ## Commands
@@ -116,8 +116,9 @@ Most targets require `VIDEO=path/to/file.mp4`. The exception is `make live`, whi
 | `make pdf VIDEO=...` | P9: Build color PDF |
 | `make pdf-bw VIDEO=...` | P9: Build B&W PDF |
 | `make clean VIDEO=...` | Delete all outputs for this video |
+| `make probe-camera` | List camera indices and which one delivers 4K |
 | `make install` | Install Python dependencies |
-| `make help VIDEO=...` | Show all targets and parameters |
+| `make help` | Show all targets and parameters |
 
 ## Pipeline Details
 
@@ -144,10 +145,11 @@ make finish VIDEO=recordings/mybook.mp4
 | `U` | Undo last capture |
 | `C` | Force-capture the current frame now |
 | `Space` | Pause / resume auto-capture |
+| `M` | Toggle capture sound mute |
 
 **Tuning:** webcam motion magnitudes differ from pre-recorded clips, so you may need to adjust the thresholds (see Configuration). Watch the motion bar relative to the threshold ticks: if turns aren't detected, lower `TURN`; if it captures while you're still moving, raise `SETTLE` or `SETTLE_TIME`.
 
-> **macOS Continuity Camera:** for real scan resolution, use an iPhone as the webcam rather than the built-in laptop camera, and mount it on a fixed stand so framing stays stable across the session.
+> **Camera selection:** `make live` requests 4K and `CAMERA=auto` (the default) picks whichever connected camera actually delivers it — USB indices shuffle on reconnect, so run `make probe-camera` to see what each reports, or set `CAMERA=<index>` to force one. Mount the camera on a fixed stand so framing stays stable across the session.
 
 ### P1 — Motion Signal
 
@@ -179,7 +181,7 @@ For each detected spread, picks the lowest-motion frame (sharpness as tiebreaker
 make review VIDEO=recordings/mybook.mp4
 ```
 
-OpenCV GUI for reviewing and correcting the keyframe selection. This phase is reentrant — run it as many times as needed before proceeding.
+Tkinter GUI for reviewing and correcting the keyframe selection. This phase is reentrant — run it as many times as needed before proceeding.
 
 **Keys:**
 
@@ -194,9 +196,8 @@ OpenCV GUI for reviewing and correcting the keyframe selection. This phase is re
 | `5` | Mark as Cover |
 | `6` | Mark as Doc Start |
 | `I` | Insert frame (opens video scrubber) |
-| `L` | Set crop guides (`←/→` move, `Tab` switch, `Enter` confirm, `Esc` cancel) |
-| `Shift+L` | Per-frame crop override |
-| `N` | Open note field |
+| `C` | Toggle center line |
+| `G` | Adjust the split/gutter line (`[` `]` rotate, `Backspace` reset, `Enter` confirm, `Esc` cancel) |
 | `⌘S` | Save |
 
 ### P5 — Crop
@@ -227,12 +228,15 @@ make page-review VIDEO=recordings/mybook.mp4
 
 Tkinter GUI for flagging page quality. Results saved to `json/page_review.json`.
 
-| Key | Flag |
+| Key | Action |
 |-----|------|
-| `1` | Great |
-| `2` | Acceptable |
-| `3` | Poor |
-| `4` | Crop issue |
+| `1` | Flag: Great |
+| `2` | Flag: Acceptable |
+| `3` | Flag: Poor |
+| `4` | Flag: Crop issue |
+| `0` | Clear flag |
+| `X` | Toggle drop page |
+| `⌘S` | Save |
 
 ### P8 — Binarize (optional)
 
@@ -240,7 +244,7 @@ Tkinter GUI for flagging page quality. Results saved to `json/page_review.json`.
 make binarize VIDEO=recordings/mybook.mp4
 ```
 
-Applies adaptive thresholding to produce clean black-and-white images → `bw/`. Controlled by `BLOCK_SIZE` and `BW_OFFSET` (see Configuration).
+Produces clean black-and-white images → `bw/` (written as lossless PNG). Defaults to Sauvola local thresholding; set `BW_METHOD=adaptive` for the older Gaussian adaptive threshold. The grayscale is upscaled (`BW_UPSCALE`) first to anti-alias letter edges. Tune with `BW_METHOD`, `BW_UPSCALE`, `BW_K` (Sauvola; higher = thinner strokes), `BLOCK_SIZE`, and `BW_OFFSET` (adaptive only) — see Configuration.
 
 ### P9 — Build PDF
 
@@ -249,7 +253,7 @@ make pdf VIDEO=recordings/mybook.mp4       # color PDF from pages/
 make pdf-bw VIDEO=recordings/mybook.mp4   # B&W PDF from bw/
 ```
 
-Assembles pages in order into a PDF using reportlab. Output: `pdf/book.pdf` or `pdf/book_bw.pdf`.
+Assembles pages in order into a PDF using reportlab. Output: `pdf/<name>.pdf` or `pdf/<name>_bw.pdf`.
 
 ## Configuration
 
@@ -265,9 +269,12 @@ make all VIDEO=recordings/mybook.mp4 MODE=single SAFETY_MARGIN=0.01
 | `NAME` | *(required for `live`)* | Project name; `make live` records to `recordings/<NAME>.mp4` |
 | `MODE` | `double` | `double` for book spreads, `single` for loose documents |
 | `SAFETY_MARGIN` | `0.005` | Crop safety margin as a fraction of image dimension |
-| `BLOCK_SIZE` | `51` | Adaptive threshold block size for binarization (must be odd) |
-| `BW_OFFSET` | `10` | Threshold offset for binarization |
-| `CAMERA` | `0` | Webcam index for `make live` |
+| `BW_METHOD` | `sauvola` | Binarization method: `sauvola` or `adaptive` |
+| `BW_UPSCALE` | `2` | Grayscale upscale factor before thresholding (anti-aliases edges) |
+| `BW_K` | `0.2` | Sauvola threshold factor (higher = thinner strokes) |
+| `BLOCK_SIZE` | `51` | Threshold window size for binarization (must be odd) |
+| `BW_OFFSET` | `10` | Threshold offset (`adaptive` method only) |
+| `CAMERA` | `auto` | Webcam for `make live` — `auto` picks the camera that delivers 4K, or set an index (`make probe-camera` lists them) |
 | `SETTLE` | `2.0` | Live: motion below this counts as "still" (book settled) |
 | `TURN` | `5.0` | Live: motion above this counts as a page turn in progress |
 | `SETTLE_TIME` | `0.4` | Live: seconds of stillness required before a capture fires |
@@ -285,17 +292,17 @@ make all VIDEO=recordings/african_founders.mp4
 make bw VIDEO=recordings/african_founders.mp4
 
 # Output:
-#   output/african_founders/pdf/book.pdf
-#   output/african_founders/pdf/book_bw.pdf
+#   output/african_founders/pdf/african_founders.pdf
+#   output/african_founders/pdf/african_founders_bw.pdf
 ```
 
 ## Troubleshooting
 
 **No peaks detected** — The video may have low-contrast page turns. Check `plots/motion_plot.png` to inspect the signal. Adjust peak detection parameters in `scripts/p2_detect_peaks.py`.
 
-**Crop removes too much / too little** — Adjust `SAFETY_MARGIN`, or use the `L` key in P4 review to set crop guides manually.
+**Crop removes too much / too little** — Adjust `SAFETY_MARGIN`. For an off-center spine, fix the split with the `G` gutter line in P4 review.
 
-**Binarization looks wrong** — Try different `BLOCK_SIZE` (larger = coarser regions) and `BW_OFFSET` (higher = more aggressive thresholding).
+**Binarization looks wrong** — Try `BW_METHOD=adaptive`, or tune `BW_K` (Sauvola stroke weight; higher = thinner), `BLOCK_SIZE` (larger = coarser regions), and `BW_OFFSET` (adaptive only).
 
 **PDF page order is wrong** — Page ordering follows the `pages.json` metadata. Check `json/keyframes.json` for frame numbering issues.
 

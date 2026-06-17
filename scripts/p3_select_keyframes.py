@@ -63,7 +63,8 @@ def main():
     parser.add_argument("video", help="Path to video file")
     parser.add_argument("--sample-rate", type=int, default=6)
     parser.add_argument("--motion-margin", type=float, default=0.5)
-    parser.add_argument("--jpeg-quality", type=int, default=95)
+    parser.add_argument("--jpeg-quality", type=int, default=95,
+                        help="JPEG quality for extracted keyframes")
     args = parser.parse_args()
 
     log("=" * 60)
