@@ -109,7 +109,7 @@ $(KEYFRAMES): $(PEAKS)
 	python $(SCRIPTS)/p3_select_keyframes.py $(OUTDIR) $(VIDEO)
 
 review: $(KEYFRAMES)
-	python $(SCRIPTS)/p4_review_keyframes.py $(OUTDIR) $(VIDEO)
+	python $(SCRIPTS)/p4_review_keyframes.py $(OUTDIR) $(VIDEO) --mode $(MODE)
 
 crop: $(KEYFRAMES)
 	python $(SCRIPTS)/p5_crop.py $(OUTDIR) --mode $(MODE) --safety-margin $(SAFETY_MARGIN)

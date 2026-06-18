@@ -16,14 +16,18 @@ Keys:
   C    Toggle center guide
   G    Adjust split/rotation (←/→ gutter, [ / ] rotate, Enter save, Esc cancel, ⌫ reset)
        Also marks the spread Keep — you only tune the split on pages you keep.
+       Double mode only; in single mode there is no spine to split.
   ⌘S   Save
 
-Cropping and deskew are automatic (Phase 5). G previews that result and lets
-you correct the gutter (split) and rotation per spread. Both corrections
-propagate forward to later spreads until the next correction: rotation as a
-fixed angle, the gutter as a tracking prior — later spreads re-detect the spine
-in a tight band around your last hint, so it follows the book as it shifts and a
-correction stays the exception, not the rule.
+Cropping and deskew are automatic (Phase 5). In double mode, G previews that
+result and lets you correct the gutter (split) and rotation per spread. Both
+corrections propagate forward to later spreads until the next correction:
+rotation as a fixed angle, the gutter as a tracking prior — later spreads
+re-detect the spine in a tight band around your last hint, so it follows the
+book as it shifts and a correction stays the exception, not the rule.
+
+Single mode (--mode single) reviews loose one-page-per-frame documents: each
+keyframe is one page, so the gutter overlay and the G split editor are hidden.
 """
 
 import argparse, json, sys, time, shutil, os
@@ -185,14 +189,18 @@ class VideoScrubber:
 
 
 class ReviewApp:
-    def __init__(self, root, output_dir, video_path):
+    def __init__(self, root, output_dir, video_path, mode="double"):
         self.root = root
-        self.root.title("Phase 4: Review Keyframes")
+        self.root.title(f"Phase 4: Review Keyframes ({mode} mode)")
         self.root.configure(bg="#0a0a0a")
         self.root.geometry("1200x800")
 
         self.paths = ProjectPaths(output_dir)
         self.video_path = video_path
+        # 'double' = book spreads with a spine to split; 'single' = loose
+        # one-page-per-frame docs. Single hides the gutter overlay and the G
+        # split editor — there is no spine to cut (see p6 single mode).
+        self.mode = mode
 
         self.keyframes = json.loads((self.paths.json / "keyframes.json").read_text())
         self.smoothed = np.load(str(self.paths.data / "smoothed_signal.npy"))
@@ -347,6 +355,9 @@ class ReviewApp:
 
         hf = tk.Frame(panel, bg="#0f0f0f")
         hf.pack(side="bottom", fill="x", padx=12, pady=12)
+        # The G split editor only applies to book spreads, so drop its hint line
+        # in single mode (where each frame is already one page).
+        split_hint = "G Split    (auto-crop)\n" if self.mode == "double" else ""
         tk.Label(
             hf,
             text=(
@@ -354,7 +365,7 @@ class ReviewApp:
                 "3 Occ      4 Other\n"
                 "5 Cover    6 DocStart\n"
                 "I Insert   C Center\n"
-                "G Split    (auto-crop)\n"
+                f"{split_hint}"
                 "←/A Prev   →/D Next\n"
                 "⌘S Save"
             ),
@@ -545,9 +556,9 @@ class ReviewApp:
             # vertical only in deskewed space. The dash pattern shows where the
             # line comes from: solid = this spread's own override, long dashes =
             # tracked from an earlier correction, short dashes = pure auto guess.
-            # Press G to tune it.
+            # Press G to tune it. Single mode has no spine, so skip it entirely.
             is_cover = kf.get("is_cover") or self.actions.get(idx) == "cover"
-            if not is_cover:
+            if self.mode == "double" and not is_cover:
                 own = kf.get("gutter") is not None
                 tracked = (not own) and resolve_gutter(self.keyframes, idx) is not None
                 dash = () if own else (8, 3) if tracked else (4, 4)
@@ -734,6 +745,10 @@ class ReviewApp:
         self._split_cache_key = key
 
     def _enter_split(self):
+        # Single mode has no spine to split, so the gutter/rotation editor is
+        # disabled — G is a no-op (and not advertised in the hint panel).
+        if self.mode != "double":
+            return
         if self.split_mode:
             self._split_cancel()
             return
@@ -1019,6 +1034,13 @@ def main():
     parser = argparse.ArgumentParser(description="Phase 4: Review keyframes")
     parser.add_argument("output_dir")
     parser.add_argument("video")
+    parser.add_argument(
+        "--mode",
+        choices=["single", "double"],
+        default="double",
+        help="'double' shows the spread split line + G editor; "
+        "'single' hides them for loose one-page docs (default: double)",
+    )
     args = parser.parse_args()
 
     kf_json = Path(args.output_dir) / "json" / "keyframes.json"
@@ -1027,7 +1049,7 @@ def main():
         sys.exit(1)
 
     root = tk.Tk()
-    app = ReviewApp(root, args.output_dir, args.video)
+    app = ReviewApp(root, args.output_dir, args.video, mode=args.mode)
     bring_to_front(root)
     root.mainloop()
 

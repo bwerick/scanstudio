@@ -197,8 +197,10 @@ Tkinter GUI for reviewing and correcting the keyframe selection. This phase is r
 | `6` | Mark as Doc Start |
 | `I` | Insert frame (opens video scrubber) |
 | `C` | Toggle center line |
-| `G` | Adjust the split/gutter line (`[` `]` rotate, `Backspace` reset, `Enter` confirm, `Esc` cancel) |
+| `G` | Adjust the split/gutter line (`[` `]` rotate, `Backspace` reset, `Enter` confirm, `Esc` cancel) — **double mode only** |
 | `⌘S` | Save |
+
+In `single` mode the gutter overlay and the `G` split editor are hidden, since each frame is already one page. The `review` target picks this up from `MODE=` automatically.
 
 ### P5 — Crop
 
