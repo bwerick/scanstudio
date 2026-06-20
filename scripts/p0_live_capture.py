@@ -200,7 +200,7 @@ def main():
                    help="Requested capture height (default 2160 = 4K UHD)")
     p.add_argument("--fps", type=float, default=30.0, help="Recording / timing fps")
     p.add_argument("--analysis-height", type=int, default=360)
-    p.add_argument("--preview-height", type=int, default=540,
+    p.add_argument("--preview-height", type=int, default=720,
                    help="Height of the on-screen preview. The full-res frame is "
                         "still recorded and captured; this only shrinks what gets "
                         "drawn and blitted to the window.")
@@ -329,7 +329,12 @@ def main():
         log(f"  Undid capture {kf['filename']}")
 
     win = "ScanStudio - Live Capture"
-    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    # KEEPRATIO so the frame is never stretched (or implicitly cropped) to fill
+    # the window, and size the window to the actual preview so it opens crisp and
+    # 1:1 — the full frame, just smaller — instead of being upscaled to fill a
+    # default/stale window size.
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+    cv2.resizeWindow(win, pw, ph)
     t0 = time.time()
 
     while True:
