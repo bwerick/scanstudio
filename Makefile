@@ -40,7 +40,7 @@ MODE          ?= double
 CAMERA        ?= auto
 SETTLE        ?= 2.0
 TURN          ?= 5.0
-SETTLE_TIME   ?= 0.2
+SETTLE_TIME   ?= 0.3
 PREVIEW_HEIGHT ?= 720
 
 .PHONY: all bw live finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install tkinter probe-camera help
