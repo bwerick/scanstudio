@@ -1,9 +1,11 @@
 # ScanStudio Pipeline Makefile
 #
-# Usage:
+# Usage (live):
+#   make live NAME=mybook
+#   make finish VIDEO=recordings/mybook.mp4 [MODE=double]
+#
+# Usage (batch):
 #   make all VIDEO=recordings/mybook.mp4
-#   make review VIDEO=recordings/mybook.mp4
-#   make pdf VIDEO=recordings/mybook.mp4
 
 ifeq ($(filter install help live clean tkinter probe-camera,$(MAKECMDGOALS)),)
 ifndef VIDEO
@@ -38,7 +40,7 @@ MODE          ?= double
 CAMERA        ?= auto
 SETTLE        ?= 2.0
 TURN          ?= 5.0
-SETTLE_TIME   ?= 0.4
+SETTLE_TIME   ?= 0.1
 
 .PHONY: all bw live finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install tkinter probe-camera help
 
