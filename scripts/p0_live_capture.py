@@ -205,7 +205,7 @@ def main():
                    help="Requested capture height (default 2160 = 4K UHD)")
     p.add_argument("--fps", type=float, default=30.0, help="Recording / timing fps")
     p.add_argument("--analysis-height", type=int, default=360)
-    p.add_argument("--preview-height", type=int, default=1080,
+    p.add_argument("--preview-height", type=int, default=720,
                    help="Height of the on-screen preview. The full-res frame is "
                         "still recorded and captured; this only shrinks what gets "
                         "drawn and blitted to the window.")
