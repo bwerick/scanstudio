@@ -197,10 +197,13 @@ Tkinter GUI for reviewing and correcting the keyframe selection. This phase is r
 | `6` | Mark as Doc Start |
 | `I` | Insert frame (opens video scrubber) |
 | `C` | Toggle center line |
-| `G` | Adjust the split/gutter line (`[` `]` rotate, `Backspace` reset, `Enter` confirm, `Esc` cancel) — **double mode only** |
+| `G` | Adjust geometry — **double:** split/gutter line (`←`/`→` gutter, `[` `]` rotate); **single:** crop box (arrows move, `⇧`+arrows resize, `[` `]` tilt). `Enter` save, `Esc` cancel, `Backspace` reset |
 | `⌘S` | Save |
 
-In `single` mode the gutter overlay and the `G` split editor are hidden, since each frame is already one page. The `review` target picks this up from `MODE=` automatically.
+`G` adapts to `MODE=` (the `review` target passes it through automatically):
+
+- **double** — previews the spread split + deskew and lets you correct the gutter and rotation per spread; corrections propagate forward to later spreads.
+- **single** — the gutter overlay is hidden (each frame is already one page). `G` opens a **crop editor**: an adjustable rotated rectangle over the raw frame. Use it when the GrabCut auto-crop (P5) clips real text or wanders as page sizes vary (e.g. receipts). Confirming stores the box as 4 corners on the keyframe, and P5 warps exactly that box instead of auto-detecting. A confirmed crop is drawn as a green box during review.
 
 ### P5 — Crop
 
@@ -211,7 +214,7 @@ make crop VIDEO=recordings/mybook.mp4
 Crops the book/page out of the surrounding frame. Modifies `images/` in-place. Re-run P3 to restore originals.
 
 - `double` mode: applies crop bounds from P4 + Otsu background detection
-- `single` mode: uses GrabCut to segment the page from the table surface; handles rotation and works with any page color
+- `single` mode: warps a P4 manual crop box (`crop_quad`) if present; otherwise uses GrabCut to segment the page from the table surface (handles rotation, works with any page color)
 
 ### P6 — Split Pages
 

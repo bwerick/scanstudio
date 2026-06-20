@@ -14,9 +14,9 @@ Keys:
   4    Delete: Other    5    Cover    6    Doc Start
   I    Insert frame (video scrubber)
   C    Toggle center guide
-  G    Adjust split/rotation (←/→ gutter, [ / ] rotate, Enter save, Esc cancel, ⌫ reset)
-       Also marks the spread Keep — you only tune the split on pages you keep.
-       Double mode only; in single mode there is no spine to split.
+  G    Adjust geometry — double: split/rotation; single: crop box
+       Double (←/→ gutter, [ / ] rotate); single (arrows move, ⇧+arrows size,
+       [ / ] tilt). Enter save, Esc cancel, ⌫ reset. Marks the frame Keep.
   ⌘S   Save
 
 Cropping and deskew are automatic (Phase 5). In double mode, G previews that
@@ -27,7 +27,11 @@ re-detect the spine in a tight band around your last hint, so it follows the
 book as it shifts and a correction stays the exception, not the rule.
 
 Single mode (--mode single) reviews loose one-page-per-frame documents: each
-keyframe is one page, so the gutter overlay and the G split editor are hidden.
+keyframe is one page, so the gutter overlay is hidden. G instead opens a crop
+editor — an adjustable rotated rectangle over the raw frame (move/resize/tilt) —
+because GrabCut auto-crop (Phase 5) can clip real text or wander when page sizes
+vary across frames. Confirming stores the box as 4 corners on the keyframe;
+Phase 5 warps exactly that box instead of auto-detecting.
 """
 
 import argparse, json, sys, time, shutil, os
@@ -55,7 +59,7 @@ from utils import (
     resolve_gutter,
     bring_to_front,
 )
-from p5_crop import crop_double_page, _spread_tilt
+from p5_crop import crop_double_page, _spread_tilt, detect_page_quad
 
 ACTIONS = {
     "keep": {"color": "#22c55e", "label": "Keep", "key": "1"},
@@ -198,8 +202,8 @@ class ReviewApp:
         self.paths = ProjectPaths(output_dir)
         self.video_path = video_path
         # 'double' = book spreads with a spine to split; 'single' = loose
-        # one-page-per-frame docs. Single hides the gutter overlay and the G
-        # split editor — there is no spine to cut (see p6 single mode).
+        # one-page-per-frame docs. Single hides the gutter overlay; G opens the
+        # crop editor instead of the split editor (there is no spine to cut).
         self.mode = mode
 
         self.keyframes = json.loads((self.paths.json / "keyframes.json").read_text())
@@ -233,6 +237,24 @@ class ReviewApp:
         self._split_photo_key = None
         self._split_geom = (0, 0, 1, 1)  # ix0, iy0, dw, dh of the drawn preview
         self._gutter_cache = {}  # idx -> split-line endpoints (raw-frame fractions)
+
+        # Crop adjust (single mode). The crop is a rotated rectangle over the raw
+        # frame — move/resize/tilt it, and the 4 corners are stored per-keyframe
+        # (as fractions of the frame) so Phase 5 warps that box instead of
+        # auto-detecting. GrabCut auto-crop can clip real text or wander when
+        # page sizes vary across frames (receipts), so this is the manual escape.
+        self.crop_mode = False
+        self._crop_cx = self._crop_cy = 0.0  # box center, raw-frame px
+        self._crop_w = self._crop_h = 0.0  # box size, raw-frame px
+        self._crop_angle = 0.0  # tilt, degrees
+        self._crop_W = self._crop_H = 1  # frame dims, for step sizing + clamps
+        self._crop_src = "auto"  # "auto" / "manual", for the HUD
+        self._crop_base_photo = None  # cached base frame so nudges only redraw the box
+        self._crop_base_key = None
+        self._crop_geom = (0, 0, 1.0)  # ix0, iy0, px->canvas scale of the drawn frame
+        # idx -> auto-crop box (fractional corners) for the always-on preview,
+        # computed lazily on first view and cached (like _gutter_cache).
+        self._crop_preview_cache = {}
 
         # Restore cover/doc_start from keyframe data
         for i, kf in enumerate(self.keyframes):
@@ -355,9 +377,13 @@ class ReviewApp:
 
         hf = tk.Frame(panel, bg="#0f0f0f")
         hf.pack(side="bottom", fill="x", padx=12, pady=12)
-        # The G split editor only applies to book spreads, so drop its hint line
+        # G means "edit geometry": the spread split in double mode, the crop box
         # in single mode (where each frame is already one page).
-        split_hint = "G Split    (auto-crop)\n" if self.mode == "double" else ""
+        split_hint = (
+            "G Split    (auto-crop)\n"
+            if self.mode == "double"
+            else "G Crop     (adjust box)\n"
+        )
         tk.Label(
             hf,
             text=(
@@ -384,8 +410,14 @@ class ReviewApp:
         return lbl
 
     def _bind_keys(self):
-        self.root.bind("<Right>", lambda e: self._on_arrow("right"))
-        self.root.bind("<Left>", lambda e: self._on_arrow("left"))
+        for d in ("left", "right", "up", "down"):
+            self.root.bind(
+                f"<{d.capitalize()}>", lambda e, d=d: self._on_arrow(d, shift=False)
+            )
+            self.root.bind(
+                f"<Shift-{d.capitalize()}>",
+                lambda e, d=d: self._on_arrow(d, shift=True),
+            )
         for k in "da":
             self.root.bind(k, lambda e, k=k: self._nav_key(k))
         for n, act in [
@@ -400,7 +432,7 @@ class ReviewApp:
                 n,
                 lambda e, a=act: (
                     self._set_action(a)
-                    if not self._in_text() and not self.split_mode
+                    if not self._in_text() and not self._editing()
                     else None
                 ),
             )
@@ -408,7 +440,7 @@ class ReviewApp:
             "i",
             lambda e: (
                 self._open_scrubber()
-                if not self._in_text() and not self.split_mode
+                if not self._in_text() and not self._editing()
                 else None
             ),
         )
@@ -416,50 +448,70 @@ class ReviewApp:
             "c",
             lambda e: (
                 self._toggle_center()
-                if not self._in_text() and not self.split_mode
+                if not self._in_text() and not self._editing()
                 else None
             ),
         )
-        self.root.bind(
-            "g",
-            lambda e: self._enter_split() if not self._in_text() else None,
-        )
-        self.root.bind(
-            "G",
-            lambda e: self._enter_split() if not self._in_text() else None,
-        )
-        self.root.bind(
-            "<bracketleft>",
-            lambda e: self._split_rotate(-0.25) if self.split_mode else None,
-        )
-        self.root.bind(
-            "<bracketright>",
-            lambda e: self._split_rotate(0.25) if self.split_mode else None,
-        )
-        self.root.bind(
-            "<BackSpace>", lambda e: self._split_reset() if self.split_mode else None
-        )
-        self.root.bind(
-            "<Return>",
-            lambda e: self._split_confirm() if self.split_mode else None,
-        )
-        self.root.bind(
-            "<Escape>",
-            lambda e: self._split_cancel() if self.split_mode else None,
-        )
+        for g in ("g", "G"):
+            self.root.bind(
+                g, lambda e: self._enter_geometry() if not self._in_text() else None
+            )
+        self.root.bind("<bracketleft>", lambda e: self._editor_rotate(-0.25))
+        self.root.bind("<bracketright>", lambda e: self._editor_rotate(0.25))
+        self.root.bind("<BackSpace>", lambda e: self._editor_reset())
+        self.root.bind("<Return>", lambda e: self._editor_confirm())
+        self.root.bind("<Escape>", lambda e: self._editor_cancel())
         self.root.bind("<Command-s>", lambda e: self._save())
 
-    def _on_arrow(self, direction):
+    def _editing(self):
+        """True while either geometry editor (split or crop) is open."""
+        return self.split_mode or self.crop_mode
+
+    # ── Editor key dispatch (split in double mode, crop in single) ──
+    def _enter_geometry(self):
+        if self.mode == "double":
+            self._enter_split()
+        else:
+            self._enter_crop()
+
+    def _editor_rotate(self, delta):
         if self.split_mode:
-            self._split_move(0.002 if direction == "right" else -0.002)
-        elif not self._in_text():
+            self._split_rotate(delta)
+        elif self.crop_mode:
+            self._crop_rotate(delta)
+
+    def _editor_reset(self):
+        if self.split_mode:
+            self._split_reset()
+        elif self.crop_mode:
+            self._crop_reset()
+
+    def _editor_confirm(self):
+        if self.split_mode:
+            self._split_confirm()
+        elif self.crop_mode:
+            self._crop_confirm()
+
+    def _editor_cancel(self):
+        if self.split_mode:
+            self._split_cancel()
+        elif self.crop_mode:
+            self._crop_cancel()
+
+    def _on_arrow(self, direction, shift=False):
+        if self.split_mode:
+            if direction in ("left", "right"):
+                self._split_move(0.002 if direction == "right" else -0.002)
+        elif self.crop_mode:
+            self._crop_arrow(direction, shift)
+        elif not self._in_text() and not shift:
             if direction == "right":
                 self._go_next()
-            else:
+            elif direction == "left":
                 self._go_prev()
 
     def _nav_key(self, k):
-        if not self._in_text() and not self.split_mode:
+        if not self._in_text() and not self._editing():
             if k == "d":
                 self._go_next()
             elif k == "a":
@@ -509,6 +561,9 @@ class ReviewApp:
 
         if self.split_mode:
             self._render_split(cw, ch)
+            return
+        if self.crop_mode:
+            self._render_crop(cw, ch)
             return
 
         try:
@@ -573,6 +628,25 @@ class ReviewApp:
                         fill="#22ff66",
                         width=2,
                         dash=dash,
+                    )
+
+            # Single mode: preview the crop p5 will make, so you can spot a bad
+            # auto-crop without entering the editor. A confirmed manual override
+            # is solid; the auto-detected box (computed lazily, cached) is
+            # dashed. Press G to adjust.
+            if self.mode == "single":
+                manual = kf.get("crop_quad")
+                quad = manual if manual else self._auto_crop_quad(idx)
+                if quad:
+                    pts = []
+                    for fx, fy in quad:
+                        pts += [ix0 + fx * dw, iy0 + fy * dh]
+                    self.canvas.create_polygon(
+                        pts,
+                        outline="#22ff66",
+                        fill="",
+                        width=2,
+                        dash=() if manual else (4, 4),
                     )
         except Exception as e:
             self.canvas.delete("all")
@@ -655,6 +729,7 @@ class ReviewApp:
             new_actions[k + 1 if k >= insert_at else k] = v
         self.actions = new_actions
         self._gutter_cache.clear()  # indices shifted
+        self._crop_preview_cache.clear()
 
         self.pending_inserts.append(new_kf)
         self.session_log.append(
@@ -745,8 +820,8 @@ class ReviewApp:
         self._split_cache_key = key
 
     def _enter_split(self):
-        # Single mode has no spine to split, so the gutter/rotation editor is
-        # disabled — G is a no-op (and not advertised in the hint panel).
+        # Spreads only. _enter_geometry already routes single mode to the crop
+        # editor, so this guard is just belt-and-suspenders.
         if self.mode != "double":
             return
         if self.split_mode:
@@ -912,6 +987,233 @@ class ReviewApp:
             tags="ov",
         )
 
+    # ── Crop adjust (single mode) ──
+    def _auto_crop_quad(self, idx):
+        """Auto-crop box for the always-on preview, as fractional corners.
+
+        Mirrors what p5 will do with no override: the GrabCut detection, or its
+        center-80% fallback when nothing is found. Cached per idx — the first
+        view of a frame runs GrabCut (~1s), later views are instant; invalidated
+        when indices shift (insert/delete)."""
+        if idx in self._crop_preview_cache:
+            return self._crop_preview_cache[idx]
+        kf = self.keyframes[idx]
+        quad = None
+        try:
+            img = cv2.imread(str(self.paths.images / kf["filename"]))
+            h, w = img.shape[:2]
+            q = detect_page_quad(img)
+            if q is None:
+                # p5's fallback when detection fails: center 80% of the frame.
+                q = np.array(
+                    [[0.1 * w, 0.1 * h], [0.9 * w, 0.1 * h],
+                     [0.9 * w, 0.9 * h], [0.1 * w, 0.9 * h]],
+                    dtype=np.float32,
+                )
+            quad = [(float(x) / w, float(y) / h) for x, y in q]
+        except Exception:
+            quad = None
+        self._crop_preview_cache[idx] = quad
+        return quad
+
+    def _enter_crop(self):
+        if self.crop_mode:
+            self._crop_cancel()
+            return
+        idx = self.current_idx
+        kf = self.keyframes[idx]
+        img = cv2.imread(str(self.paths.images / kf["filename"]))
+        if img is None:
+            messagebox.showinfo("Crop", "Could not read this frame.")
+            return
+        self._crop_H, self._crop_W = img.shape[:2]
+        # Tuning a crop implies it's a page you're keeping (mirrors the split
+        # editor), so adopt Keep too and clear any stale delete flag.
+        self.actions[idx] = "keep"
+        stored = kf.get("crop_quad")
+        if stored:
+            quad = np.array(
+                [[x * self._crop_W, y * self._crop_H] for x, y in stored],
+                dtype=np.float32,
+            )
+            self._crop_src = "manual"
+        else:
+            quad = detect_page_quad(img)
+            if quad is None:
+                quad = self._default_quad()
+                self._crop_src = "auto*"  # detector found nothing; centered guess
+            else:
+                self._crop_src = "auto"
+        self._set_rect_from_quad(quad)
+        self.crop_mode = True
+        self._crop_base_key = None  # force a base-frame redraw
+        self.root.focus_set()
+        self._show_current()
+
+    def _default_quad(self):
+        """Centered box at 80% of the frame, for when detection fails."""
+        W, H = self._crop_W, self._crop_H
+        bw, bh = 0.8 * W, 0.8 * H
+        cx, cy = W / 2, H / 2
+        return np.array(
+            [
+                [cx - bw / 2, cy - bh / 2],
+                [cx + bw / 2, cy - bh / 2],
+                [cx + bw / 2, cy + bh / 2],
+                [cx - bw / 2, cy + bh / 2],
+            ],
+            dtype=np.float32,
+        )
+
+    def _set_rect_from_quad(self, quad):
+        """Load the editor's (center, size, angle) model from 4 corners (px).
+
+        Works for any quad — a detector result or a stored override — by reading
+        the center, the averaged side lengths, and the top-edge angle, so the
+        round-trip is independent of OpenCV's minAreaRect angle convention."""
+        tl, tr, br, bl = [np.asarray(p, dtype=float) for p in quad]
+        c = (tl + tr + br + bl) / 4.0
+        self._crop_cx, self._crop_cy = float(c[0]), float(c[1])
+        self._crop_w = float((np.linalg.norm(tr - tl) + np.linalg.norm(br - bl)) / 2)
+        self._crop_h = float((np.linalg.norm(bl - tl) + np.linalg.norm(br - tr)) / 2)
+        self._crop_angle = float(np.degrees(np.arctan2(tr[1] - tl[1], tr[0] - tl[0])))
+
+    def _quad_from_rect(self):
+        """The 4 corners (tl, tr, br, bl) in raw-frame px for the current box."""
+        a = np.radians(self._crop_angle)
+        ux, uy = np.cos(a), np.sin(a)  # unit vector along the top edge
+        vx, vy = -np.sin(a), np.cos(a)  # unit vector down the left edge
+        hw, hh = self._crop_w / 2, self._crop_h / 2
+        cx, cy = self._crop_cx, self._crop_cy
+        return [
+            (cx - hw * ux - hh * vx, cy - hw * uy - hh * vy),
+            (cx + hw * ux - hh * vx, cy + hw * uy - hh * vy),
+            (cx + hw * ux + hh * vx, cy + hw * uy + hh * vy),
+            (cx - hw * ux + hh * vx, cy - hw * uy + hh * vy),
+        ]
+
+    def _crop_arrow(self, direction, shift):
+        W, H = self._crop_W, self._crop_H
+        if shift:
+            # Resize about the center: ←/→ width, ↑/↓ height.
+            if direction == "left":
+                self._crop_w = max(0.05 * W, self._crop_w - 0.01 * W)
+            elif direction == "right":
+                self._crop_w = min(1.5 * W, self._crop_w + 0.01 * W)
+            elif direction == "up":
+                self._crop_h = min(1.5 * H, self._crop_h + 0.01 * H)
+            elif direction == "down":
+                self._crop_h = max(0.05 * H, self._crop_h - 0.01 * H)
+        else:
+            # Pan the box, keeping its center within the frame.
+            if direction == "left":
+                self._crop_cx -= 0.004 * W
+            elif direction == "right":
+                self._crop_cx += 0.004 * W
+            elif direction == "up":
+                self._crop_cy -= 0.004 * H
+            elif direction == "down":
+                self._crop_cy += 0.004 * H
+            self._crop_cx = max(0.0, min(W, self._crop_cx))
+            self._crop_cy = max(0.0, min(H, self._crop_cy))
+        self._crop_src = "manual"
+        self._draw_crop_overlay()
+
+    def _crop_rotate(self, delta):
+        self._crop_angle += delta
+        self._crop_src = "manual"
+        self._draw_crop_overlay()
+
+    def _crop_reset(self):
+        """Drop the override and re-seed from the auto detector."""
+        kf = self.keyframes[self.current_idx]
+        kf.pop("crop_quad", None)
+        img = cv2.imread(str(self.paths.images / kf["filename"]))
+        quad = detect_page_quad(img) if img is not None else None
+        if quad is None:
+            quad = self._default_quad()
+            self._crop_src = "auto*"
+        else:
+            self._crop_src = "auto"
+        self._set_rect_from_quad(quad)
+        self._show_current()
+
+    def _crop_confirm(self):
+        kf = self.keyframes[self.current_idx]
+        quad = self._quad_from_rect()
+        # Store corners as fractions of the frame so Phase 5 can map them back to
+        # pixels and warp the box (independent of any later resize).
+        kf["crop_quad"] = [
+            [round(x / self._crop_W, 5), round(y / self._crop_H, 5)] for x, y in quad
+        ]
+        self.session_log.append(
+            {
+                "time": datetime.now().isoformat(),
+                "type": "crop",
+                "frame": kf["frame_index"],
+            }
+        )
+        self.crop_mode = False
+        self._show_current()
+
+    def _crop_cancel(self):
+        self.crop_mode = False
+        self._show_current()
+
+    def _render_crop(self, cw, ch):
+        """Draw the raw frame, then the adjustable crop box on top.
+
+        The resized base frame is cached (keyed by frame + canvas size) so only
+        the cheap box overlay redraws while it's moved/resized/rotated."""
+        kf = self.keyframes[self.current_idx]
+        key = (self.current_idx, cw, ch)
+        if key != self._crop_base_key or self._crop_base_photo is None:
+            pil = Image.open(self.paths.images / kf["filename"])
+            iw, ih = pil.size
+            scale = min(cw / iw, ch / ih, 1.0)
+            dw, dh = max(1, int(iw * scale)), max(1, int(ih * scale))
+            self._crop_base_photo = ImageTk.PhotoImage(
+                pil.resize((dw, dh), Image.LANCZOS)
+            )
+            self._crop_base_key = key
+            self._crop_geom = ((cw - dw) // 2, (ch - dh) // 2, scale)
+        self.photo = self._crop_base_photo
+        self.canvas.delete("all")
+        self.canvas.create_image(
+            cw // 2, ch // 2, image=self._crop_base_photo, anchor="center"
+        )
+        self._draw_crop_overlay()
+
+    def _draw_crop_overlay(self):
+        """Redraw just the crop box, corner handles, and status text."""
+        self.canvas.delete("ov")
+        ix0, iy0, scale = self._crop_geom
+        quad = self._quad_from_rect()
+        pts = []
+        for x, y in quad:
+            pts += [ix0 + x * scale, iy0 + y * scale]
+        self.canvas.create_polygon(
+            pts, outline="#22ff66", fill="", width=2, tags="ov"
+        )
+        for x, y in quad:
+            hx, hy = ix0 + x * scale, iy0 + y * scale
+            self.canvas.create_rectangle(
+                hx - 4, hy - 4, hx + 4, hy + 4,
+                outline="#22ff66", fill="#0a0a0a", tags="ov",
+            )
+        self.canvas.create_text(
+            self.canvas.winfo_width() // 2,
+            iy0 + 14,
+            text=(
+                f"CROP — arrows move  ⇧+arrows size  [ / ] tilt "
+                f"({self._crop_angle:+.1f}°)  Enter save  Esc cancel  ⌫ auto   "
+                f"src={self._crop_src}"
+            ),
+            fill="#22ff66",
+            font=("Menlo", 10),
+            tags="ov",
+        )
+
     # ── Save ──
     def _save(self):
         # Collect deletions
@@ -994,6 +1296,7 @@ class ReviewApp:
         self.pending_inserts = []
         self.actions = {}
         self._gutter_cache.clear()  # indices shifted after deletions
+        self._crop_preview_cache.clear()
 
         # Re-flag covers/doc_starts from data
         for i, kf in enumerate(self.keyframes):

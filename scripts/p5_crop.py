@@ -131,11 +131,14 @@ def order_points(pts):
     return r
 
 
-def crop_single_page(img, padding_pct=0.01):
-    """
-    GrabCut-based crop for single loose documents.
-    Detects the document against the table, handles rotation,
-    and applies perspective correction to produce a straight rectangle.
+def detect_page_quad(img):
+    """GrabCut-segment a loose page from the table; return its 4 corners.
+
+    Returns an ordered ``(tl, tr, br, bl)`` float32 array in full-image pixel
+    coordinates (the page's minimum-area rectangle), or ``None`` when no
+    confident page-sized region is found. Both the automatic crop
+    (``crop_single_page``) and the Phase-4 manual crop editor seed from this, so
+    the box the operator tunes starts exactly where the detector landed.
     """
     h, w = img.shape[:2]
 
@@ -165,19 +168,17 @@ def crop_single_page(img, padding_pct=0.01):
     fgd_model = np.zeros((1, 65), dtype=np.float64)
     cv2.grabCut(work, mask, None, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_MASK)
 
-    page_mask = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(
+    page = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(
         np.uint8
     )
 
     # Clean up mask
     kernel = np.ones((9, 9), np.uint8)
-    page_mask = cv2.morphologyEx(page_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    page_mask = cv2.morphologyEx(page_mask, cv2.MORPH_OPEN, kernel, iterations=2)
+    page = cv2.morphologyEx(page, cv2.MORPH_CLOSE, kernel, iterations=2)
+    page = cv2.morphologyEx(page, cv2.MORPH_OPEN, kernel, iterations=2)
 
     # Find largest contour (skip whole-frame detections)
-    contours, _ = cv2.findContours(
-        page_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
+    contours, _ = cv2.findContours(page, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
     best = None
@@ -188,24 +189,28 @@ def crop_single_page(img, padding_pct=0.01):
             break
 
     if best is None:
-        # Fallback: return center 80%
-        mx, my = int(w * 0.1), int(h * 0.1)
-        return img[my : h - my, mx : w - mx], "grabcut_fallback"
+        return None
 
-    # Get rotated rectangle
-    rect = cv2.minAreaRect(best)
-    box = cv2.boxPoints(rect).astype(np.float32)
+    # Rotated rectangle, scaled back to original image coordinates
+    box = cv2.boxPoints(cv2.minAreaRect(best)).astype(np.float32) / scale
+    return order_points(box)
 
-    # Scale corners back to original image coordinates
-    box_orig = box / scale
 
-    # Order the corners
-    ordered = order_points(box_orig)
+def crop_to_quad(img, quad, padding_pct=0.01):
+    """Perspective-straighten the page bounded by ``quad`` into a rectangle.
+
+    ``quad`` is an ordered ``(tl, tr, br, bl)`` array in image pixels — either a
+    detector result or a Phase-4 manual override. The quad is expanded outward
+    by ``padding_pct`` (so edges aren't clipped) and warped to a straight,
+    axis-aligned rectangle.
+    """
+    ordered = order_points(np.asarray(quad, dtype=np.float32))
     tl, tr, br, bl = ordered
+    h, w = img.shape[:2]
 
-    # Compute output dimensions
-    out_w = int(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))
-    out_h = int(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))
+    # Output dimensions from the quad's side lengths
+    out_w = max(1, int(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl))))
+    out_h = max(1, int(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr))))
 
     # Add safety padding to avoid clipping edges
     pad_x = int(out_w * padding_pct)
@@ -218,8 +223,7 @@ def crop_single_page(img, padding_pct=0.01):
         direction = ordered[i] - center
         length = np.linalg.norm(direction)
         if length > 0:
-            direction = direction / length
-            padded[i] = ordered[i] + direction * max(pad_x, pad_y)
+            padded[i] = ordered[i] + (direction / length) * max(pad_x, pad_y)
 
     # Clamp to image bounds
     padded[:, 0] = np.clip(padded[:, 0], 0, w - 1)
@@ -228,7 +232,6 @@ def crop_single_page(img, padding_pct=0.01):
     # Perspective transform to straighten the page
     out_w_padded = out_w + 2 * pad_x
     out_h_padded = out_h + 2 * pad_y
-
     dst = np.array(
         [
             [0, 0],
@@ -238,11 +241,23 @@ def crop_single_page(img, padding_pct=0.01):
         ],
         dtype=np.float32,
     )
-
     M = cv2.getPerspectiveTransform(padded, dst)
-    warped = cv2.warpPerspective(img, M, (out_w_padded, out_h_padded))
+    return cv2.warpPerspective(img, M, (out_w_padded, out_h_padded))
 
-    return warped, "grabcut"
+
+def crop_single_page(img, padding_pct=0.01):
+    """Auto-crop a single loose document: detect the page, then straighten it.
+
+    Detects the document against the table (handling rotation) and applies
+    perspective correction to produce a straight rectangle. Falls back to the
+    center 80% when no confident page region is found.
+    """
+    quad = detect_page_quad(img)
+    if quad is None:
+        h, w = img.shape[:2]
+        mx, my = int(w * 0.1), int(h * 0.1)
+        return img[my : h - my, mx : w - mx], "grabcut_fallback"
+    return crop_to_quad(img, quad, padding_pct), "grabcut"
 
 
 # ── Main ─────────────────────────────────────────────────────
@@ -329,10 +344,16 @@ def main():
         is_cover = kf.get("is_cover", False)
 
         if args.mode == "single":
-            # Single-page: GrabCut detection + perspective correction
-            if is_cover:
-                # Still crop covers
-                cropped, method = crop_single_page(img, args.padding)
+            # Single-page: a Phase-4 manual crop override (4 corners as
+            # fractions of the frame) wins; otherwise GrabCut auto-detection.
+            quad = kf.get("crop_quad")
+            if quad:
+                h_img, w_img = img.shape[:2]
+                quad_px = np.array(
+                    [[p[0] * w_img, p[1] * h_img] for p in quad], dtype=np.float32
+                )
+                cropped = crop_to_quad(img, quad_px, args.padding)
+                method = "manual_quad"
             else:
                 cropped, method = crop_single_page(img, args.padding)
 
