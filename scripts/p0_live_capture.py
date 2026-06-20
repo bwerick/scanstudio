@@ -70,16 +70,22 @@ def resolution_label(w, h):
     return f"{h}p"
 
 
-def draw_overlay(disp, state, motion, smooth, settle_thr, turn_thr,
-                 count, paused, flash_text, flash_until, muted=False, res_text=""):
-    """Draw the live HUD onto the (downscaled) preview frame, in place.
+def draw_overlay(preview, state, motion, smooth, settle_thr, turn_thr,
+                 count, paused, flash_text, flash_until, header_h,
+                 muted=False, res_text=""):
+    """Compose the display: the full downsampled frame with a HUD band stacked
+    *above* it, so the HUD never covers the page.
 
-    Layout is authored for a 540px-tall preview and scaled by ``fs`` so the HUD
-    stays proportional at any --preview-height. ``res_text`` is the capture
-    resolution string (built from the recording size, not ``disp``'s size).
+    ``preview`` is the entire camera frame, just downsampled — nothing is
+    cropped. The status bar lives in its own black strip on top (the recording
+    is the raw frame and never sees any of this); only the transient capture
+    flash overlays the image area, and it clears itself after a moment.
     """
-    h, w = disp.shape[:2]
-    fs = h / 540.0
+    ph, pw = preview.shape[:2]
+    canvas = np.zeros((ph + header_h, pw, 3), dtype=np.uint8)
+    canvas[header_h:header_h + ph] = preview
+
+    fs = header_h / 100.0       # HUD layout authored for a ~100px header
 
     def sc(v):
         return int(round(v * fs))
@@ -87,47 +93,46 @@ def draw_overlay(disp, state, motion, smooth, settle_thr, turn_thr,
     th = max(1, sc(2))          # default stroke for headline text
     thin = max(1, sc(1))        # stroke for small text / lines
 
-    # Top status bar
-    bar_h = sc(64)
-    cv2.rectangle(disp, (0, 0), (w, bar_h), (0, 0, 0), -1)
     state_color = {"WAITING": (0, 200, 255), "SETTLED": (0, 220, 0),
                    "TURNING": (0, 140, 255)}.get(state, (200, 200, 200))
-    cv2.putText(disp, f"{state}", (sc(10), sc(24)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6 * fs, state_color, th)
-    cv2.putText(disp, f"captured: {count}", (sc(10), sc(46)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45 * fs, (230, 230, 230), thin)
+    cv2.putText(canvas, f"{state}", (sc(12), sc(34)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7 * fs, state_color, th)
+    cv2.putText(canvas, f"captured: {count}", (sc(12), sc(64)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5 * fs, (230, 230, 230), thin)
     if paused:
-        cv2.putText(disp, "PAUSED", (w - sc(95), sc(24)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6 * fs, (0, 0, 255), th)
+        cv2.putText(canvas, "PAUSED", (pw - sc(120), sc(34)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7 * fs, (0, 0, 255), th)
     # Recording resolution — persistent, right-aligned so it reads at a glance
     if res_text:
-        (tw, _), _ = cv2.getTextSize(res_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5 * fs, th)
-        cv2.putText(disp, res_text, (w - tw - sc(10), sc(46)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5 * fs, (255, 255, 0), th)
+        (tw, _), _ = cv2.getTextSize(res_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55 * fs, th)
+        cv2.putText(canvas, res_text, (pw - tw - sc(12), sc(64)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55 * fs, (255, 255, 0), th)
 
     # Motion bar (maps motion onto a fixed scale relative to turn threshold)
-    bx, by, bw, bh = sc(150), sc(14), w - sc(300), sc(16)
+    bx, by, bw, bh = sc(185), sc(20), pw - sc(390), sc(18)
     scale = max(turn_thr * 1.6, motion, 1e-3)
-    cv2.rectangle(disp, (bx, by), (bx + bw, by + bh), (60, 60, 60), thin)
+    cv2.rectangle(canvas, (bx, by), (bx + bw, by + bh), (60, 60, 60), thin)
     fill = int(bw * min(smooth / scale, 1.0))
-    cv2.rectangle(disp, (bx, by), (bx + fill, by + bh), state_color, -1)
+    cv2.rectangle(canvas, (bx, by), (bx + fill, by + bh), state_color, -1)
     for thr, col in ((settle_thr, (0, 220, 0)), (turn_thr, (0, 140, 255))):
         x = bx + int(bw * min(thr / scale, 1.0))
-        cv2.line(disp, (x, by - sc(3)), (x, by + bh + sc(3)), col, thin)
-    cv2.putText(disp, f"motion {smooth:4.1f}", (bx, by + bh + sc(14)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4 * fs, (200, 200, 200), thin)
+        cv2.line(canvas, (x, by - sc(4)), (x, by + bh + sc(4)), col, thin)
+    cv2.putText(canvas, f"motion {smooth:4.1f}", (bx, by + bh + sc(16)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45 * fs, (200, 200, 200), thin)
 
-    # Help line — in the status bar so it's always visible
+    # Help line — along the bottom of the header strip
     mute_label = "M unmute" if muted else "M mute"
-    cv2.putText(disp, f"Q quit  |  U undo  |  C capture  |  Space pause  |  {mute_label}",
-                (sc(10), sc(60)), cv2.FONT_HERSHEY_SIMPLEX, 0.4 * fs, (160, 160, 160), thin)
+    cv2.putText(canvas, f"Q quit  |  U undo  |  C capture  |  Space pause  |  {mute_label}",
+                (sc(12), sc(92)), cv2.FONT_HERSHEY_SIMPLEX, 0.45 * fs, (160, 160, 160), thin)
 
-    # Capture flash
+    # Capture flash — transient, over the image area (clears on its own)
     if time.time() < flash_until and flash_text:
-        (tw, _), _ = cv2.getTextSize(flash_text, cv2.FONT_HERSHEY_SIMPLEX, 1.0 * fs, th)
-        cv2.putText(disp, flash_text, (w // 2 - tw // 2, h // 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0 * fs, (0, 255, 0), th)
-    return disp
+        ffs = ph / 540.0
+        fth = max(1, int(round(2 * ffs)))
+        (tw, _), _ = cv2.getTextSize(flash_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2 * ffs, fth)
+        cv2.putText(canvas, flash_text, (pw // 2 - tw // 2, header_h + ph // 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.2 * ffs, (0, 255, 0), fth)
+    return canvas
 
 
 def open_camera(requested, want_w, want_h, fps):
@@ -235,6 +240,7 @@ def main():
     aw = int(orig_w * scale)
     ph = args.preview_height
     pw = int(orig_w * ph / orig_h)
+    header_h = max(96, int(round(pw * 0.06)))   # HUD band above the frame (no occlusion)
     res_label = resolution_label(orig_w, orig_h)
     res_text = f"{res_label}  {orig_w}x{orig_h}"
     log(f"Camera {args.camera}: {orig_w}x{orig_h} ({res_label})  "
@@ -334,7 +340,7 @@ def main():
     # 1:1 — the full frame, just smaller — instead of being upscaled to fill a
     # default/stale window size.
     cv2.namedWindow(win, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
-    cv2.resizeWindow(win, pw, ph)
+    cv2.resizeWindow(win, pw, ph + header_h)
     t0 = time.time()
 
     while True:
@@ -390,8 +396,8 @@ def main():
         # frame), so there's no full-res copy and imshow blits a small image.
         disp = draw_overlay(preview, state, motion, smooth,
                             args.settle_threshold, args.turn_threshold,
-                            len(keyframes), paused, flash_text, flash_until, muted,
-                            res_text)
+                            len(keyframes), paused, flash_text, flash_until,
+                            header_h, muted, res_text)
         cv2.imshow(win, disp)
 
         key = cv2.waitKey(1) & 0xFF
