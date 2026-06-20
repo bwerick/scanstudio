@@ -27,8 +27,10 @@ Keys (in the live window):
 
 import argparse
 import json
+import queue
 import subprocess
 import sys
+import threading
 import time
 from collections import deque
 
@@ -69,47 +71,62 @@ def resolution_label(w, h):
 
 
 def draw_overlay(disp, state, motion, smooth, settle_thr, turn_thr,
-                 count, paused, flash_text, flash_until, muted=False, res_label=""):
+                 count, paused, flash_text, flash_until, muted=False, res_text=""):
+    """Draw the live HUD onto the (downscaled) preview frame, in place.
+
+    Layout is authored for a 540px-tall preview and scaled by ``fs`` so the HUD
+    stays proportional at any --preview-height. ``res_text`` is the capture
+    resolution string (built from the recording size, not ``disp``'s size).
+    """
     h, w = disp.shape[:2]
+    fs = h / 540.0
+
+    def sc(v):
+        return int(round(v * fs))
+
+    th = max(1, sc(2))          # default stroke for headline text
+    thin = max(1, sc(1))        # stroke for small text / lines
+
     # Top status bar
-    cv2.rectangle(disp, (0, 0), (w, 95), (0, 0, 0), -1)
+    bar_h = sc(64)
+    cv2.rectangle(disp, (0, 0), (w, bar_h), (0, 0, 0), -1)
     state_color = {"WAITING": (0, 200, 255), "SETTLED": (0, 220, 0),
                    "TURNING": (0, 140, 255)}.get(state, (200, 200, 200))
-    cv2.putText(disp, f"{state}", (15, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, state_color, 2)
-    cv2.putText(disp, f"captured: {count}", (15, 58),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (230, 230, 230), 1)
+    cv2.putText(disp, f"{state}", (sc(10), sc(24)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6 * fs, state_color, th)
+    cv2.putText(disp, f"captured: {count}", (sc(10), sc(46)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45 * fs, (230, 230, 230), thin)
     if paused:
-        cv2.putText(disp, "PAUSED", (w - 130, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        cv2.putText(disp, "PAUSED", (w - sc(95), sc(24)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6 * fs, (0, 0, 255), th)
     # Recording resolution — persistent, right-aligned so it reads at a glance
-    if res_label:
-        res_text = f"{res_label}  {w}x{h}"
-        (tw, _), _ = cv2.getTextSize(res_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-        cv2.putText(disp, res_text, (w - tw - 15, 58),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+    if res_text:
+        (tw, _), _ = cv2.getTextSize(res_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5 * fs, th)
+        cv2.putText(disp, res_text, (w - tw - sc(10), sc(46)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5 * fs, (255, 255, 0), th)
 
     # Motion bar (maps motion onto a fixed scale relative to turn threshold)
-    bx, by, bw = 220, 22, w - 420
+    bx, by, bw, bh = sc(150), sc(14), w - sc(300), sc(16)
     scale = max(turn_thr * 1.6, motion, 1e-3)
-    cv2.rectangle(disp, (bx, by), (bx + bw, by + 22), (60, 60, 60), 1)
+    cv2.rectangle(disp, (bx, by), (bx + bw, by + bh), (60, 60, 60), thin)
     fill = int(bw * min(smooth / scale, 1.0))
-    cv2.rectangle(disp, (bx, by), (bx + fill, by + 22), state_color, -1)
+    cv2.rectangle(disp, (bx, by), (bx + fill, by + bh), state_color, -1)
     for thr, col in ((settle_thr, (0, 220, 0)), (turn_thr, (0, 140, 255))):
         x = bx + int(bw * min(thr / scale, 1.0))
-        cv2.line(disp, (x, by - 4), (x, by + 26), col, 1)
-    cv2.putText(disp, f"motion {smooth:4.1f}", (bx, by + 42),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+        cv2.line(disp, (x, by - sc(3)), (x, by + bh + sc(3)), col, thin)
+    cv2.putText(disp, f"motion {smooth:4.1f}", (bx, by + bh + sc(14)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4 * fs, (200, 200, 200), thin)
 
     # Help line — in the status bar so it's always visible
     mute_label = "M unmute" if muted else "M mute"
     cv2.putText(disp, f"Q quit  |  U undo  |  C capture  |  Space pause  |  {mute_label}",
-                (15, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (160, 160, 160), 1)
+                (sc(10), sc(60)), cv2.FONT_HERSHEY_SIMPLEX, 0.4 * fs, (160, 160, 160), thin)
 
     # Capture flash
     if time.time() < flash_until and flash_text:
-        cv2.putText(disp, flash_text, (w // 2 - 160, h // 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 255, 0), 3)
+        (tw, _), _ = cv2.getTextSize(flash_text, cv2.FONT_HERSHEY_SIMPLEX, 1.0 * fs, th)
+        cv2.putText(disp, flash_text, (w // 2 - tw // 2, h // 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0 * fs, (0, 255, 0), th)
     return disp
 
 
@@ -183,6 +200,10 @@ def main():
                    help="Requested capture height (default 2160 = 4K UHD)")
     p.add_argument("--fps", type=float, default=30.0, help="Recording / timing fps")
     p.add_argument("--analysis-height", type=int, default=360)
+    p.add_argument("--preview-height", type=int, default=540,
+                   help="Height of the on-screen preview. The full-res frame is "
+                        "still recorded and captured; this only shrinks what gets "
+                        "drawn and blitted to the window.")
     p.add_argument("--smoothing-window", type=int, default=15)
     p.add_argument("--settle-threshold", type=float, default=2.0,
                    help="Motion below this counts as 'still'")
@@ -212,9 +233,12 @@ def main():
             f"that mode — run `make probe-camera` to see what each one supports.")
     scale = args.analysis_height / orig_h
     aw = int(orig_w * scale)
+    ph = args.preview_height
+    pw = int(orig_w * ph / orig_h)
     res_label = resolution_label(orig_w, orig_h)
+    res_text = f"{res_label}  {orig_w}x{orig_h}"
     log(f"Camera {args.camera}: {orig_w}x{orig_h} ({res_label})  "
-        f"analysis {aw}x{args.analysis_height}")
+        f"analysis {aw}x{args.analysis_height}  preview {pw}x{ph}")
     log(f"Recording to {args.video_out}")
     log(f"Thresholds: settle<{args.settle_threshold} turn>{args.turn_threshold}, "
         f"settle_time={args.settle_time}s")
@@ -224,6 +248,27 @@ def main():
     if not writer.isOpened():
         log(f"ERROR: Cannot open VideoWriter for {args.video_out}")
         sys.exit(1)
+
+    # Encode on a background thread so the 4K software encode never stalls the
+    # capture/preview loop. Frames are queued read-only: cap.read() hands back a
+    # fresh array each call and the overlay draws on a separate preview image, so
+    # the worker can encode a frame while the main loop still holds the same
+    # buffer in its sharpness window. The queue is bounded — if the encoder falls
+    # behind, put() blocks (backpressure) instead of growing memory unbounded.
+    frame_queue: "queue.Queue" = queue.Queue(maxsize=64)
+    WRITER_STOP = object()
+
+    def writer_worker():
+        while True:
+            item = frame_queue.get()
+            if item is WRITER_STOP:
+                frame_queue.task_done()
+                break
+            writer.write(item)
+            frame_queue.task_done()
+
+    writer_thread = threading.Thread(target=writer_worker, daemon=True)
+    writer_thread.start()
 
     settle_frames = max(1, int(args.settle_time * args.fps))
     buf = deque(maxlen=settle_frames)   # (frame_index, frame_bgr, sharpness)
@@ -293,10 +338,17 @@ def main():
             log("Camera stream ended.")
             break
 
-        writer.write(frame)
+        frame_queue.put(frame)      # background thread does the 4K encode
         frame_idx += 1
 
-        small = cv2.resize(frame, (aw, args.analysis_height), interpolation=cv2.INTER_AREA)
+        # One expensive 4K downscale feeds both the preview and the analysis
+        # frame; the analysis frame is then derived from the preview (a cheap
+        # small->smaller resize) rather than touching the 4K array a second time.
+        preview = cv2.resize(frame, (pw, ph), interpolation=cv2.INTER_AREA)
+        if ph >= args.analysis_height:
+            small = cv2.resize(preview, (aw, args.analysis_height), interpolation=cv2.INTER_AREA)
+        else:
+            small = cv2.resize(frame, (aw, args.analysis_height), interpolation=cv2.INTER_AREA)
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
         motion = float(np.mean(cv2.absdiff(prev_small, gray))) if prev_small is not None else 0.0
         prev_small = gray
@@ -306,7 +358,9 @@ def main():
         win_n = min(args.smoothing_window, len(diffs))
         smooth = float(np.mean(diffs[-win_n:]))
 
-        buf.append((frame_idx, frame.copy(), laplacian_sharpness(gray)))
+        # cap.read() returns a fresh array each call, so the rolling sharpness
+        # window can hold the frame directly — no per-frame full-res copy.
+        buf.append((frame_idx, frame, laplacian_sharpness(gray)))
 
         if not paused:
             still = smooth < args.settle_threshold
@@ -327,10 +381,12 @@ def main():
                     state = "SETTLED"
                     saw_turn = False
 
-        disp = draw_overlay(frame.copy(), state, motion, smooth,
+        # Draw the HUD straight onto the downscaled preview (a fresh array each
+        # frame), so there's no full-res copy and imshow blits a small image.
+        disp = draw_overlay(preview, state, motion, smooth,
                             args.settle_threshold, args.turn_threshold,
                             len(keyframes), paused, flash_text, flash_until, muted,
-                            res_label)
+                            res_text)
         cv2.imshow(win, disp)
 
         key = cv2.waitKey(1) & 0xFF
@@ -350,6 +406,8 @@ def main():
             log(f"  Sound {'muted' if muted else 'unmuted'}")
 
     cap.release()
+    frame_queue.put(WRITER_STOP)    # drain remaining frames, then stop the worker
+    writer_thread.join()
     writer.release()
     cv2.destroyAllWindows()
 
