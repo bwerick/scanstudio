@@ -41,6 +41,7 @@ CAMERA        ?= auto
 SETTLE        ?= 2.0
 TURN          ?= 5.0
 SETTLE_TIME   ?= 0.1
+PREVIEW_HEIGHT ?= 1080
 
 .PHONY: all bw live finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install tkinter probe-camera help
 
@@ -71,7 +72,7 @@ help:
 	@echo "  SAFETY_MARGIN=$(SAFETY_MARGIN)  BLOCK_SIZE=$(BLOCK_SIZE)  BW_OFFSET=$(BW_OFFSET)"
 	@echo "  BW_METHOD=$(BW_METHOD) (sauvola|adaptive)  BW_UPSCALE=$(BW_UPSCALE)  BW_K=$(BW_K) (higher=thinner)"
 	@echo "  MODE=$(MODE)  (double=book spreads, single=loose docs)"
-	@echo "  live: CAMERA=$(CAMERA)  SETTLE=$(SETTLE)  TURN=$(TURN)  SETTLE_TIME=$(SETTLE_TIME)"
+	@echo "  live: CAMERA=$(CAMERA)  SETTLE=$(SETTLE)  TURN=$(TURN)  SETTLE_TIME=$(SETTLE_TIME)  PREVIEW_HEIGHT=$(PREVIEW_HEIGHT)"
 
 all: motion peaks keyframes finish
 	@echo "Pipeline complete: $(PDF)"
@@ -92,7 +93,7 @@ endif
 	@mkdir -p recordings
 	python $(SCRIPTS)/p0_live_capture.py output/$(NAME) recordings/$(NAME).mp4 \
 		--camera $(CAMERA) --settle-threshold $(SETTLE) --turn-threshold $(TURN) \
-		--settle-time $(SETTLE_TIME)
+		--settle-time $(SETTLE_TIME) --preview-height $(PREVIEW_HEIGHT)
 	@echo "Live capture done. Continue with: make finish VIDEO=recordings/$(NAME).mp4"
 
 bw: binarize pdf-bw
