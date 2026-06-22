@@ -282,7 +282,7 @@ make all VIDEO=recordings/mybook.mp4 MODE=single SAFETY_MARGIN=0.01
 | `CAMERA` | `auto` | Webcam for `make live` — `auto` picks the camera that delivers 4K, or set an index (`make probe-camera` lists them) |
 | `SETTLE` | `2.0` | Live: motion below this counts as "still" (book settled) |
 | `TURN` | `5.0` | Live: motion above this counts as a page turn in progress |
-| `SETTLE_TIME` | `0.4` | Live: seconds of stillness required before a capture fires |
+| `SETTLE_TIME` | `0.3` | Live: seconds of stillness required before a capture fires |
 
 ## Example Walkthrough
 
