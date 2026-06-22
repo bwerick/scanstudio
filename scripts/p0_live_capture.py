@@ -117,13 +117,17 @@ def draw_overlay(preview, state, motion, smooth, settle_thr, turn_thr,
     for thr, col in ((settle_thr, (0, 220, 0)), (turn_thr, (0, 140, 255))):
         x = bx + int(bw * min(thr / scale, 1.0))
         cv2.line(canvas, (x, by - sc(4)), (x, by + bh + sc(4)), col, thin)
-    cv2.putText(canvas, f"motion {smooth:4.1f}", (bx, by + bh + sc(16)),
+    label_y = by + bh + sc(16)
+    motion_label = f"motion {smooth:4.1f}"
+    cv2.putText(canvas, motion_label, (bx, label_y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45 * fs, (200, 200, 200), thin)
 
     # Brightness / luminosity — mean luma of the analysis frame (0-255), with a
-    # percent-of-full-scale gloss; sits just past the motion bar on the same line.
+    # percent-of-full-scale gloss. Placed right after the motion label on the same
+    # line (center area), clear of the resolution readout in the top-right corner.
+    (mw, _), _ = cv2.getTextSize(motion_label, cv2.FONT_HERSHEY_SIMPLEX, 0.45 * fs, thin)
     cv2.putText(canvas, f"lum {brightness:5.1f} ({brightness / 2.55:2.0f}%)",
-                (bx + bw + sc(12), by + bh + sc(16)),
+                (bx + mw + sc(24), label_y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45 * fs, (200, 200, 200), thin)
 
     # Help line — along the bottom of the header strip
