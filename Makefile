@@ -8,7 +8,7 @@
 #   make all VIDEO=recordings/mybook.mp4
 
 ifeq ($(filter install help live clean tkinter probe-camera,$(MAKECMDGOALS)),)
-ifndef VIDEO
+ifeq ($(strip $(VIDEO)),)
 $(error VIDEO is required. Usage: make all VIDEO=recordings/mybook.mp4)
 endif
 endif
@@ -87,7 +87,7 @@ finish: review crop split page-review pdf
 #   make live NAME=mybook [CAMERA=1]
 #   make finish VIDEO=recordings/mybook.mp4
 live:
-ifndef NAME
+ifeq ($(strip $(NAME)),)
 	$(error NAME is required. Usage: make live NAME=mybook)
 endif
 	@mkdir -p recordings
