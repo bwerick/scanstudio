@@ -72,7 +72,7 @@ def resolution_label(w, h):
 
 def draw_overlay(preview, state, motion, smooth, settle_thr, turn_thr,
                  count, paused, flash_text, flash_until, header_h,
-                 muted=False, res_text=""):
+                 muted=False, res_text="", brightness=0.0):
     """Compose the display: the full downsampled frame with a HUD band stacked
     *above* it, so the HUD never covers the page.
 
@@ -118,6 +118,12 @@ def draw_overlay(preview, state, motion, smooth, settle_thr, turn_thr,
         x = bx + int(bw * min(thr / scale, 1.0))
         cv2.line(canvas, (x, by - sc(4)), (x, by + bh + sc(4)), col, thin)
     cv2.putText(canvas, f"motion {smooth:4.1f}", (bx, by + bh + sc(16)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45 * fs, (200, 200, 200), thin)
+
+    # Brightness / luminosity — mean luma of the analysis frame (0-255), with a
+    # percent-of-full-scale gloss; sits just past the motion bar on the same line.
+    cv2.putText(canvas, f"lum {brightness:5.1f} ({brightness / 2.55:2.0f}%)",
+                (bx + bw + sc(12), by + bh + sc(16)),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45 * fs, (200, 200, 200), thin)
 
     # Help line — along the bottom of the header strip
@@ -364,6 +370,7 @@ def main():
         motion = float(np.mean(cv2.absdiff(prev_small, gray))) if prev_small is not None else 0.0
         prev_small = gray
         diffs.append(motion)
+        brightness = float(np.mean(gray))   # mean luma of the scene (0-255)
 
         # Short trailing mean for stable thresholding (online smoothing)
         win_n = min(args.smoothing_window, len(diffs))
@@ -397,7 +404,7 @@ def main():
         disp = draw_overlay(preview, state, motion, smooth,
                             args.settle_threshold, args.turn_threshold,
                             len(keyframes), paused, flash_text, flash_until,
-                            header_h, muted, res_text)
+                            header_h, muted, res_text, brightness)
         cv2.imshow(win, disp)
 
         key = cv2.waitKey(1) & 0xFF
