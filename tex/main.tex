@@ -1,14 +1,21 @@
-\documentclass[twocolumn]{article}
+\documentclass{article}
 \usepackage{graphicx}
 \usepackage{amsmath}
 \usepackage{hyperref}
 
 \title{ScanStudio: Video to PDF for Document Intelligence}
 
+\author{Erick Duarte, Akshit Jain, Rohan Boddu,\\Rolando Garcia, Tyson Winarski, Ross Maciejewski}
+
 \begin{document}
 
 
 \maketitle
+
+\section{Introduction}
+
+In this section we present \textsc{ScanStudio}, \dots
+
 
 \begin{figure}[t!]
     \centering
@@ -22,18 +29,6 @@
     \includegraphics[width=0.95\linewidth]{images/video2pdf.png}
     \caption{Video-to-PDF Loop: A fixed overhead camera films an operator turning pages; an online state machine tracks inter-frame motion and auto-captures the sharpest frame each time the book settles after a turn (\texttt{make live}). The resulting keyframes pass through motion-based detection and selection, then an interactive review stage where the operator corrects (+/-) the keyframe set and per-spread split geometry, before automated crop, split, and PDF assembly (\texttt{make finish}). Orange stages run in real time during live capture and produce the same artifacts as the offline front end, so a pre-recorded video can enter the green back half directly.}
     \label{fig:digitalDesk}
-\end{figure*}
-
-\section{ScanStudio: Video to PDF}
-
-In this section we present \textsc{ScanStudio}, \dots
-
-
-\begin{figure*}[t!]
-    \centering
-    \includegraphics[width=0.97\linewidth]{images/peaks_plot2.png}
-    \caption{Motion-based page-turn detection during book scanning. The top panel shows the smoothed motion signal over the full recording, with detected peaks marked as page turns; the detector identifies 245 page turns, corresponding to 246 scanned spreads. The bottom panel zooms into the first 120 seconds, where alternating shaded bands indicate successive spreads and red markers show detected page-turn events (mean spread duration $\approx 2\,\mathrm{secs}$).}
-    \label{fig:peaks}
 \end{figure*}
 
 \subsection{Live Recording \& Real-time Feedback}
@@ -67,6 +62,13 @@ Output:
     smoothed signal.npy - 15 frame rolling average
     metadata.json - video info, resolution, fps, frame count
     motion plot.png - visual
+
+\begin{figure*}[t!]
+    \centering
+    \includegraphics[width=0.97\linewidth]{images/peaks_plot2.png}
+    \caption{Motion-based page-turn detection during book scanning. The top panel shows the smoothed motion signal over the full recording, with detected peaks marked as page turns; the detector identifies 245 page turns, corresponding to 246 scanned spreads. The bottom panel zooms into the first 120 seconds, where alternating shaded bands indicate successive spreads and red markers show detected page-turn events (mean spread duration $\approx 2\,\mathrm{secs}$).}
+    \label{fig:peaks}
+\end{figure*}
 
 \subsubsection{Phase 2: Detect Peaks}
 Page turn events are identified using \texttt{scipy.signal.find\_peaks} on teh smoothed motuion signal. These peaks serve as boundaries where we can select exactly one frame to represent a a unique page/book spread.
