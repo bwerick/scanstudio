@@ -72,7 +72,7 @@ end (run live during capture), the green stages the corresponding back half.
     \label{fig:pipeline}
 \end{figure*}
 
-\subsection{Overhead Capture}
+\subsection{The Overhead Rig}
 \label{sec:capture}
 
 We capture overhead video of a person flipping through pages with a 4K
@@ -104,17 +104,18 @@ selection~\cite{huang2009correlation}; and hands-free operation could be
 extended to wearables and AR headsets~\cite{mann1997wearable,
 Meta2023RayBanMeta}. These are promising directions for future work.
 
-\subsection{Real-Time Capture and Keyframing}
+\subsection{Live Keyframe Selection}
 \label{sec:live}
 
 In its primary mode, \sys selects keyframes \emph{live}, as the operator turns
 pages. The webcam feed is recorded and analyzed at the same time: the system
 tracks the page-turn rhythm and auto-captures one sharp frame per spread the
-instant the book settles after a turn. There is no separate scanning step---when
-the operator closes the book, the page images are already chosen. Throughout, the
-operator stays inside a tight feedback loop: a live motion bar and a capture chime
+instant the book settles after a turn. Selection happens during the flip-through
+itself, not in a later pass over the recording, so the page images are complete the
+moment the operator closes the book. Throughout, the operator stays inside 
+a tight feedback loop: a live motion bar and a capture chime
 report what the system is doing, so its pace can be adjusted and a bad capture
-corrected without ever leaving the live view.
+corrected without having to exit the live view.
 
 \noindent\textbf{Motion as a page-turn signal.}
 \sys keys on the fact that page turns leave a distinctive signature in the video.
@@ -160,15 +161,18 @@ merely its leading edge.
 \noindent\textbf{Keeping the capture loop real-time.}
 Encoding 4K video in software is expensive enough to stall a naive
 capture-and-display loop, so \sys offloads encoding to a background thread fed
-through a bounded queue: if the encoder falls behind, the queue applies
-backpressure instead of growing memory without bound. A single downscale of each
+through a bounded queue. The capture loop hands off each frame and returns
+immediately to preview and analysis, while the encoder drains the queue at its
+own pace. Because the queue is fixed in size, an encoder that falls behind
+throttles capture---a brief, bounded stall---rather than piling up un-encoded
+frames in unbounded memory; under load, frames are delayed, never dropped. A single downscale of each
 4K frame feeds both the on-screen preview and the 360-pixel analysis frame,
-avoiding a second pass over the full-resolution array. The heads-up display---the
-live motion bar with the settle and turn thresholds marked, the current state,
-a running capture count, and a green \texttt{CAPTURED} badge that flashes on each
-commit---is drawn in a band \emph{above} the frame so that it
-never occludes the page, and it is never written to the recording, which stores
-only raw frames.
+avoiding a second pass over the full-resolution array. The heads-up display---a live motion bar with the settle and turn thresholds
+marked, the current state, a running capture count, and a green
+\texttt{CAPTURED} badge that flashes on each commit---occupies a band
+\emph{above} the frame, so it never occludes the page (the orange pane in
+Figure~\ref{fig:pipeline}). It is shown only on the operator's screen and is
+never written to the recording, which stores only raw frames.
 
 \noindent\textbf{A human in the control loop.}
 The on-screen feedback and the per-capture chime close the loop around the operator
@@ -187,18 +191,18 @@ alongside the keyframe images and their metadata, the same artifacts the offline
 path produces, so the shared back half (Section~\ref{sec:backhalf}) proceeds
 identically.
 
-\begin{figure*}[t!]
-    \centering
-    \includegraphics[width=0.97\linewidth]{images/peaks_plot2.png}
-    \caption{Motion-based page-turn detection on a representative book scan. The
-    top panel shows the smoothed motion signal over the full recording, with
-    detected peaks marked as page turns; the detector identifies $245$ page
-    turns, corresponding to $246$ scanned spreads. The bottom panel zooms into
-    the first $120$ seconds, where alternating shaded bands indicate successive
-    spreads and red markers show detected page-turn events (mean spread
-    duration $\approx 2$\,seconds).}
-    \label{fig:peaks}
-\end{figure*}
+% \begin{figure*}[t!]
+%     \centering
+%     \includegraphics[width=0.97\linewidth]{images/peaks_plot2.png}
+%     \caption{Motion-based page-turn detection on a representative book scan. The
+%     top panel shows the smoothed motion signal over the full recording, with
+%     detected peaks marked as page turns; the detector identifies $245$ page
+%     turns, corresponding to $246$ scanned spreads. The bottom panel zooms into
+%     the first $120$ seconds, where alternating shaded bands indicate successive
+%     spreads and red markers show detected page-turn events (mean spread
+%     duration $\approx 2$\,seconds).}
+%     \label{fig:peaks}
+% \end{figure*}
 
 \subsection{Offline Keyframe Extraction}
 \label{sec:offline}
@@ -240,8 +244,9 @@ highest sharpness wins, measured as the variance of the Laplacian over the
 central $80\%$ of the frame (the margins are excluded so that a hand or page edge
 entering the border does not inflate the score). The chosen frame is then
 extracted from the source video at full resolution and written to disk. Stillness
-selects the moment the spread is flat and motion-free; the sharpness tiebreaker
-guards against residual focus hunting at that moment.
+picks the moment the spread lies flat and motion-free; sharpness then breaks ties
+among those still frames, discarding any in which the autofocus has not finished
+settling.
 
 \subsection{Review, Crop, and Assembly}
 \label{sec:backhalf}
@@ -294,23 +299,19 @@ half then receives a fine text-line deskew via a projection-profile search, sinc
 page curvature near the spine can skew the two halves differently.
 
 \noindent\textbf{Phase 7 --- Page quality review (optional).}
-A second interactive pass lets the operator inspect the final page images, flag
-quality issues such as crop errors or poor focus, and drop pages from the
-output. The annotations are saved as a shareable report that can guide later
-algorithmic improvements.
+A second interactive pass lets the operator inspect the final pages, flag issues
+such as crop errors or poor focus, and drop bad ones; the annotations save to a
+shareable report that can guide later algorithmic improvement.
 
 \noindent\textbf{Phase 8 --- Binarization (optional).}
 For text-heavy documents on thick paper, \sys can produce clean black-and-white
-pages. A naive adaptive threshold looks grainy, but the grain comes from the
-pipeline around the threshold, not the threshold itself: thresholding at the
-page's native width quantizes each stroke edge onto a coarse grid, and saving
-bitonal pages as JPEG rings around every sharp edge. \sys therefore upscales the
-grayscale image (cubic) before thresholding to anti-alias letter contours,
-applies Sauvola local thresholding~\cite{sauvola2000adaptive}---which tolerates
-a gutter-shadow illumination gradient that a Gaussian adaptive threshold would
-smear into black blotches---de-speckles with a $3\times3$ median that does not
-erode strokes, and writes lossless PNG. This path is not recommended for pages
-with photographs or colored backgrounds.
+pages. Naive thresholding looks grainy, but the grain is a pipeline
+artifact---coarse-grid edge quantization at native width, plus JPEG ringing---not
+the threshold itself. \sys therefore upscales the grayscale (cubic) to anti-alias
+contours, applies Sauvola local thresholding~\cite{sauvola2000adaptive} (robust to
+the gutter-shadow gradient a Gaussian threshold smears into blotches), de-speckles
+with a stroke-preserving $3\times3$ median, and writes lossless PNG. Not
+recommended for pages with photographs or colored backgrounds.
 
 \noindent\textbf{Phase 9 --- PDF assembly.}
 Finally, the page images are assembled in order into a PDF, each page sized to
