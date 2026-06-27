@@ -217,6 +217,35 @@ Makefile
 # ignore pdf files
 *.pdf
 
+# LaTeX auxiliary / intermediate files
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.idx
+*.ind
+*.lof
+*.log
+*.lot
+*.out
+*.toc
+*.acn
+*.acr
+*.alg
+*.glg
+*.glo
+*.gls
+*.synctex.gz
+*.synctex(busy)
+*.nav
+*.snm
+*.vrb
+*.fmt
+*.fot
+*.cb
+*.cb2
+
 
 # Video recordings (too large for git)
 recordings/*.mp4
