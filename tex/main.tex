@@ -34,19 +34,19 @@ always knows, spread by spread, what the system has captured (and what it has no
 Because capture and frame selection happen in a single pass, with no separate
 offline stage to launch and wait on, the page images are ready the moment the
 operator sets the book down. 
-The capture hardware is deliberately minimal---a webcam clamped to a desk
-lamp---and a single command carries the result through to a finished document.
+The capture hardware is deliberately minimal, a webcam clamped to a well-lit desk, 
+and a single command carries the result through to a finished document.
 
-This real-time path is \sys's primary mode, and it keeps the operator in a tight
-control loop: that live feedback lets them adjust pace and fix mistakes as they go
-(Section~\ref{sec:live}). For footage shot away from a
-workstation, \sys also accepts a \emph{pre-recorded} video and recovers the same
+This live path is \sys's primary capture mode, and it keeps the operator in a
+tight control loop: real-time feedback lets them adjust their pace 
+and fix mistakes as they go (Section~\ref{sec:live}). For footage shot away from a
+workstation, \sys also accepts a pre-recorded video and recovers the same
 per-spread keyframes in a batch pass (Section~\ref{sec:offline}). Both paths emit
-identical artifacts---one full-resolution keyframe per spread plus its
-metadata---so the shared back end reviews, crops, splits, and assembles the final
+identical artifacts: one full-resolution keyframe per spread plus its
+metadata, so the shared back end reviews, crops, splits, and assembles the final
 PDF the same way, regardless of how the keyframes were captured.
 Figure~\ref{fig:pipeline} shows the full pipeline: the orange stages are the front
-end (run live during capture), the green stages the shared back half.
+end (run live during capture), the green stages the corresponding back half.
 
 \begin{figure}[t!]
     \centering
