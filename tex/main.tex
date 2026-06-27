@@ -23,18 +23,19 @@
 \section{ScanStudio}
 \label{sec:scanstudio}
 
-\sys turns a physical document---a bound book, but equally a stack of loose
-paperwork such as intake forms or receipts---into a clean, page-separated PDF as
-the operator simply flips through it. The operator points a consumer webcam at
-the document like a scanning head (Figure~\ref{fig:rig}); \sys records the session
+\sys turns physical documents---whether bound books or stacks of loose
+paperwork such as intake forms or receipts---into clean, page-separated PDFs as
+the operator simply flips through them. The operator points a consumer webcam at
+a document like a scanning head (Figure~\ref{fig:rig}); \sys records the session
 and, in real time, captures one sharp image of each spread the moment the pages
-settle after a turn. Each capture is confirmed on the spot---a chime and a green
-\texttt{CAPTURED} badge flash the instant a frame is committed---so the operator
-always knows, spread by spread, what the system has captured and what it has not.
-Capture and selection happen together---there is no separate offline pass to
-launch and wait on---so when the operator closes the book, the page images are
-already chosen. The hardware is deliberately low-friction (a webcam on a desk-lamp
-clamp), and a single command carries the result through to a finished document.
+settle after a turn. Each capture is confirmed on-the-fly: a chime and a green
+\texttt{CAPTURED} badge flash the instant a frame is committed, so the operator
+always knows, spread by spread, what the system has captured (and what it has not).
+Because capture and frame selection happen in a single pass, with no separate
+offline stage to launch and wait on, the page images are ready the moment the
+operator sets the book down. 
+The capture hardware is deliberately minimal---a webcam clamped to a desk
+lamp---and a single command carries the result through to a finished document.
 
 This real-time path is \sys's primary mode, and it keeps the operator in a tight
 control loop: that live feedback lets them adjust pace and fix mistakes as they go
