@@ -23,18 +23,22 @@
 \section{ScanStudio}
 \label{sec:scanstudio}
 
-\sys turns a book into a clean, page-separated PDF as the operator simply flips
-through it. The operator points a consumer 4K webcam at the book like a scanning
-head (Figure~\ref{fig:rig}); \sys records the session and, in real time, captures
-one sharp image of each spread the moment the book settles after a page turn.
+\sys turns a physical document---a bound book, but equally a stack of loose
+paperwork such as intake forms or receipts---into a clean, page-separated PDF as
+the operator simply flips through it. The operator points a consumer webcam at
+the document like a scanning head (Figure~\ref{fig:rig}); \sys records the session
+and, in real time, captures one sharp image of each spread the moment the pages
+settle after a turn. Each capture is confirmed on the spot---a chime and a green
+\texttt{CAPTURED} badge flash the instant a frame is committed---so the operator
+always knows, spread by spread, what the system has captured and what it has not.
 Capture and selection happen together---there is no separate offline pass to
 launch and wait on---so when the operator closes the book, the page images are
 already chosen. The hardware is deliberately low-friction (a webcam on a desk-lamp
 clamp), and a single command carries the result through to a finished document.
 
 This real-time path is \sys's primary mode, and it keeps the operator in a tight
-control loop: on-screen feedback and an audible capture cue let them adjust pace
-and fix mistakes as they go (Section~\ref{sec:live}). For footage shot away from a
+control loop: that live feedback lets them adjust pace and fix mistakes as they go
+(Section~\ref{sec:live}). For footage shot away from a
 workstation, \sys also accepts a \emph{pre-recorded} video and recovers the same
 per-spread keyframes in a batch pass (Section~\ref{sec:offline}). Both paths emit
 identical artifacts---one full-resolution keyframe per spread plus its
@@ -159,20 +163,23 @@ through a bounded queue: if the encoder falls behind, the queue applies
 backpressure instead of growing memory without bound. A single downscale of each
 4K frame feeds both the on-screen preview and the 360-pixel analysis frame,
 avoiding a second pass over the full-resolution array. The heads-up display---the
-live motion bar with the settle and turn thresholds marked, the current state, and
-a running capture count---is drawn in a band \emph{above} the frame so that it
+live motion bar with the settle and turn thresholds marked, the current state,
+a running capture count, and a green \texttt{CAPTURED} badge that flashes on each
+commit---is drawn in a band \emph{above} the frame so that it
 never occludes the page, and it is never written to the recording, which stores
 only raw frames.
 
 \noindent\textbf{A human in the control loop.}
-The on-screen feedback and the capture chime close the loop around the operator as
-much as around the software. At the immediate level, the operator can
+The on-screen feedback and the per-capture chime close the loop around the operator
+as much as around the software. At the immediate level, the operator can
 force-capture the current frame, undo the last capture, and pause or resume
 auto-capture without looking away from the book. More interestingly, the feedback
 reshapes behavior on its own: operators quickly learn to pause briefly after each
-turn and to flip more deliberately, which raises both the page-flip rate and frame
-crispness with no change to the system itself---the capture process effectively
-trains its own operator. Whether this self-serialization can be deliberately
+turn and to flip more deliberately, and when an expected chime fails to sound---a
+spread the detector missed---they will wave a hand over the page to mimic a turn and
+coax out the capture, bending their own motions to fit the interface. This raises
+both the page-flip rate and frame crispness with no change to the system
+itself---the capture process effectively trains its own operator. Whether this self-serialization can be deliberately
 cultivated, closing the gap with richer feedback rather than a better algorithm,
 is an intriguing direction for future study. On exit, \sys writes the recording
 alongside the keyframe images and their metadata, the same artifacts the offline
