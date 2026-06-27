@@ -55,15 +55,15 @@ end (run live during capture), the green stages the shared back half.
 \begin{figure*}[t!]
     \centering
     \includegraphics[width=0.95\linewidth]{images/video2pdf.png}
-    \caption{The \sys pipeline. A fixed overhead camera films an operator
-    turning pages; an online state machine tracks inter-frame motion and
-    auto-captures the sharpest frame each time the book settles after a turn
-    (\texttt{make live}). The resulting keyframes pass through an interactive
-    review stage, where the operator corrects the keyframe set and per-spread
-    split geometry, before automated crop, split, and PDF assembly
-    (\texttt{make finish}). The orange stages run in real time during live
-    capture and produce the same artifacts as the offline front end (P1--P3),
-    so a pre-recorded video can enter the green back half directly.}
+    \caption{The \sys pipeline. In live capture (\texttt{make live}), a fixed
+    overhead camera films an operator turning pages while an online state machine
+    tracks inter-frame motion and auto-captures the sharpest frame each time the
+    book settles after a turn---the orange front-end stages, all running in real
+    time. The same per-spread keyframes can instead be recovered offline (P1--P3)
+    from a pre-recorded video. Either way, the green back half
+    (\texttt{make finish}) is shared: an interactive review stage where the
+    operator corrects the keyframe set and per-spread split geometry, followed by
+    automated crop, split, and PDF assembly.}
     \label{fig:pipeline}
 \end{figure*}
 
@@ -309,5 +309,10 @@ Finally, the page images are assembled in order into a PDF, each page sized to
 match the aspect ratio of its source image. Binarized pages are embedded
 losslessly (as bitonal CCITT/Flate) rather than re-encoded as JPEG, which would
 reintroduce the very ringing that careful binarization removes.
+
+% When merging into the full paper, drop these two lines and let the main
+% document's bibliography resolve these keys (switch to the ACM style).
+\bibliographystyle{plain}
+\bibliography{references}
 
 \end{document}
