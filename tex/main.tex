@@ -1,7 +1,11 @@
 \documentclass{article}
 \usepackage{graphicx}
 \usepackage{amsmath}
+\usepackage{xspace}
 \usepackage{hyperref}
+
+% System name: use \sys everywhere in the body for a consistent small-caps mark.
+\newcommand{\sys}{\textsc{ScanStudio}\xspace}
 
 \title{ScanStudio: Video to PDF for Document Intelligence}
 
@@ -9,136 +13,301 @@
 
 \begin{document}
 
-
 \maketitle
 
-\section{Introduction}
+% NOTE: In the full paper this is Section 3, following the Introduction,
+% Background, and Related Work. The counter is bumped so the standalone
+% preview also numbers it 3; remove this line when merging.
+\setcounter{section}{2}
 
-In this section we present \textsc{ScanStudio}, \dots
+\section{ScanStudio}
+\label{sec:scanstudio}
 
+\sys turns a book into a clean, page-separated PDF as the operator simply flips
+through it. The operator points a consumer 4K webcam at the book like a scanning
+head (Figure~\ref{fig:rig}); \sys records the session and, in real time, captures
+one sharp image of each spread the moment the book settles after a page turn.
+Capture and selection happen together---there is no separate offline pass to
+launch and wait on---so when the operator closes the book, the page images are
+already chosen. The hardware is deliberately low-friction (a webcam on a desk-lamp
+clamp), and a single command carries the result through to a finished document.
+
+This real-time path is \sys's primary mode, and it keeps the operator in a tight
+control loop: on-screen feedback and an audible capture cue let them adjust pace
+and fix mistakes as they go (Section~\ref{sec:live}). For footage shot away from a
+workstation, \sys also accepts a \emph{pre-recorded} video and recovers the same
+per-spread keyframes in a batch pass (Section~\ref{sec:offline}). Both paths emit
+identical artifacts---one full-resolution keyframe per spread plus its
+metadata---so the shared back end reviews, crops, splits, and assembles the final
+PDF the same way, regardless of how the keyframes were captured.
+Figure~\ref{fig:pipeline} shows the full pipeline: the orange stages are the front
+end (run live during capture), the green stages the shared back half.
 
 \begin{figure}[t!]
     \centering
     \includegraphics[width=0.97\columnwidth]{images/OverheadRig.png}
-    \caption{Overhead digitization rig for document intelligence research. The setup includes a 4K webcam mounted above a well-illuminated workspace. Real-time alignment and quality control are monitored on screen.}
-    \label{fig:page1}
+    \caption{The overhead digitization rig. A 4K webcam is mounted above a
+    well-illuminated workspace; real-time alignment and quality control are
+    monitored on screen as the operator turns pages.}
+    \label{fig:rig}
 \end{figure}
 
 \begin{figure*}[t!]
     \centering
     \includegraphics[width=0.95\linewidth]{images/video2pdf.png}
-    \caption{Video-to-PDF Loop: A fixed overhead camera films an operator turning pages; an online state machine tracks inter-frame motion and auto-captures the sharpest frame each time the book settles after a turn (\texttt{make live}). The resulting keyframes pass through motion-based detection and selection, then an interactive review stage where the operator corrects (+/-) the keyframe set and per-spread split geometry, before automated crop, split, and PDF assembly (\texttt{make finish}). Orange stages run in real time during live capture and produce the same artifacts as the offline front end, so a pre-recorded video can enter the green back half directly.}
-    \label{fig:digitalDesk}
+    \caption{The \sys pipeline. A fixed overhead camera films an operator
+    turning pages; an online state machine tracks inter-frame motion and
+    auto-captures the sharpest frame each time the book settles after a turn
+    (\texttt{make live}). The resulting keyframes pass through an interactive
+    review stage, where the operator corrects the keyframe set and per-spread
+    split geometry, before automated crop, split, and PDF assembly
+    (\texttt{make finish}). The orange stages run in real time during live
+    capture and produce the same artifacts as the offline front end (P1--P3),
+    so a pre-recorded video can enter the green back half directly.}
+    \label{fig:pipeline}
 \end{figure*}
 
-\subsection{Live Recording \& Real-time Feedback}
+\subsection{Overhead Capture}
+\label{sec:capture}
 
-We use a $4$k Insta360 Link $2$ webcam clamped to a standard reading light to capture overhead video of a person flipping through pages (Figure~\ref{fig:page1}). Video is recorded at $24$ frames per second with automatic focus, ensuring sharpness across frames. The goal of this setup is high replicability: nothing about the hardware or lighting should require specialized equipment. To that end, we support a variety of cameras, including All-in-One cameras like GoPros, smartphones with stands, and other high resolution handheld devices.
+We capture overhead video of a person flipping through pages with a 4K
+Insta360 Link~2 webcam clamped to a standard reading light
+(Figure~\ref{fig:rig}). Video is recorded at 24 frames per second with
+autofocus enabled, which keeps individual frames sharp as the page settles. The
+guiding principle is replicability: nothing about the hardware or lighting
+should require specialized equipment. Accordingly, the rig also accommodates
+all-in-one action cameras such as GoPros, smartphones on a stand, and other
+high-resolution handheld devices.
 
-The following elements are critical for consistent capture:
+Three conditions are critical for consistent capture:
 \begin{itemize}
-    \item \textbf{Lighting:} Clear, even illumination from a desk lamp or overhead light, avoiding glare or shadows.
-    \item \textbf{Frame quality:} Video should be recorded at a minimum of 4K resolution, so small characters are legible. 
-    \item \textbf{Hands-free operation:} The mount or clamp must be steady, so the user can flip pages naturally without having to hold or operate anything else.
+    \item \textbf{Lighting:} clear, even illumination from a desk lamp or
+    overhead light, avoiding glare and hard shadows.
+    \item \textbf{Frame quality:} at least 4K resolution, so that small
+    characters remain legible after cropping.
+    \item \textbf{Hands-free operation:} a steady mount or clamp, so the
+    operator can turn pages naturally without holding or operating anything
+    else.
 \end{itemize}
 
+Each requirement can be relaxed at the cost of additional technical machinery.
+Less controlled lighting could be handled with adaptive histogram
+equalization~\cite{pizer1987adaptive} or low-light denoising
+models~\cite{li2015low}; camera movement could be tolerated with real-time
+stabilization~\cite{castillo2004real} or motion-compensated frame
+selection~\cite{huang2009correlation}; and hands-free operation could be
+extended to wearables and AR headsets~\cite{mann1997wearable,
+Meta2023RayBanMeta}. These are promising directions for future work.
 
-Each of the requirements above can be relaxed, but doing so incurs a corresponding need for technical innovation. For example, lighting conditions could be less controlled if we integrate adaptive histogram equalization~\cite{pizer1987adaptive} or low-light denoising models~\cite{li2015low}. Camera movement could be tolerated with the introduction of real-time stabilization~\cite{castillo2004real} or motion-compensated frame selection~\cite{huang2009correlation}. Hands-free operation could be achieved with wearables and AR headsets~\cite{mann1997wearable, Meta2023RayBanMeta}. These are promising directions for future work.
+\subsection{Real-Time Capture and Keyframing}
+\label{sec:live}
 
-To cite past reviewers of Yifan Wu, is there evidence of self-serializtion? Does feedback from the system cause the user to adjust their behavior, so that system performance improves without system or software level modifications? There's some evidence of that with the capture confirmation and bells, can improve page flipping rate, page crispness by allowing for stillness.
+In its primary mode, \sys selects keyframes \emph{live}, as the operator turns
+pages. The webcam feed is recorded and analyzed at the same time: the system
+tracks the page-turn rhythm and auto-captures one sharp frame per spread the
+instant the book settles after a turn. There is no separate scanning step---when
+the operator closes the book, the page images are already chosen. Throughout, the
+operator stays inside a tight feedback loop: a live motion bar and a capture chime
+report what the system is doing, so its pace can be adjusted and a bad capture
+corrected without ever leaving the live view.
 
-\subsection{Motion Signals \& Keyframing}
+\noindent\textbf{Motion as a page-turn signal.}
+\sys keys on the fact that page turns leave a distinctive signature in the video.
+When a hand enters the frame and lifts a page, pixels change sharply from one
+frame to the next: the page and hand move toward the camera (briefly defocusing),
+and their shadows darken the book and table. When the page lies flat again,
+successive frames are nearly identical. The feed therefore alternates between
+bursts of high inter-frame motion (page turns) and quiet intervals (settled
+spreads), and the quiet intervals are exactly where a clean, in-focus image of
+each spread can be found. Concretely, let $I_t$ be frame $t$ downsampled to
+360-pixel height and converted to grayscale; \sys computes the mean absolute
+inter-frame difference
+\begin{equation}
+    m_t = \frac{1}{|\Omega|} \sum_{x \in \Omega} \bigl| I_t(x) - I_{t-1}(x) \bigr|,
+    \label{eq:motion}
+\end{equation}
+over the pixel grid $\Omega$ on every incoming frame, smoothed online by a
+trailing mean over the last $15$ frames so that thresholding is stable without
+look-ahead. Computing it at reduced resolution keeps the analysis comfortably
+within the per-frame budget.
 
-Frame selection:
-With video: if we are using a video as our input, we want to collect exactly one frame for each set of unique pages from the document we are hoping to extract. When recording the video of a document, there is a predictable pattern that we can exploit to search for these frames. We noticed that from start to finish, there are periodic segments of high motion as we turn the pages. These segments of high motion give us boundaries that tell us where the frames we want are. In the case of a book, we start recording with the cover in frame. We then open the front cover to reveal the back of the covers and the first physical page. When the hands enter the frame and grab the cover and open the book, these motion cause  noticeable differences between pixel values from one frame to the next. As the page is turned, the hand and the edge of the page also get physically closer to the camera which affects the focus, and shadows darken areas of the book and table. When the page is flat, the differences between frames are lesser. We calculate the mean absolute pixel difference for each frame, and when plotted, we can use this as a type of signal. Here is the motion signal of a book with 262 unique frames. In the second plot, each shaded region likely contains a single frame we want that has the desired pages in sharp focus.
+\noindent\textbf{Online state machine.}
+A three-state machine turns this signal into capture decisions in real time. From
+\textsc{waiting}, a sustained drop below the settle threshold (a short run of
+consecutive still frames) fires the first capture and moves to \textsc{settled}.
+From \textsc{settled}, motion rising above the turn threshold signals a page turn
+in progress and moves to \textsc{turning}. From \textsc{turning}, the next
+sustained settle fires a capture and returns to \textsc{settled}. The settle and
+turn thresholds straddle the quiet-interval and page-turn motion regimes
+(Figure~\ref{fig:peaks}), and requiring the stillness to persist for a short dwell
+time before capturing prevents a momentary pause mid-turn from triggering a
+premature frame. The machine is causal---it decides from past frames alone and
+cannot revise a capture after the fact---which is exactly what makes the operator
+feedback loop below worth closing.
 
-Real time frame selection (skip the video): [Description of Rolando's new additions]
+\noindent\textbf{Sharpest-of-window capture.}
+Rather than grabbing the single frame at which the settle condition is met, \sys
+keeps a short rolling buffer of recent frames and, on a capture event, commits the
+\emph{sharpest} frame in the buffer (by variance of the Laplacian over its central
+crop). The captured image is therefore the crispest instant of the settle, not
+merely its leading edge.
 
-\subsubsection{Phase 1: Motion Signal}
-The frame to frame mean abosulte pixel differece is computed at reduced resolution to produce a an activity signal that captures page turns as peaks and stable spreads a valleys.
-Input: .mp4 .mov video file
-Output:
-    motion signal numpy file - raw frame motion scores
-    smoothed signal.npy - 15 frame rolling average
-    metadata.json - video info, resolution, fps, frame count
-    motion plot.png - visual
+\noindent\textbf{Keeping the capture loop real-time.}
+Encoding 4K video in software is expensive enough to stall a naive
+capture-and-display loop, so \sys offloads encoding to a background thread fed
+through a bounded queue: if the encoder falls behind, the queue applies
+backpressure instead of growing memory without bound. A single downscale of each
+4K frame feeds both the on-screen preview and the 360-pixel analysis frame,
+avoiding a second pass over the full-resolution array. The heads-up display---the
+live motion bar with the settle and turn thresholds marked, the current state, and
+a running capture count---is drawn in a band \emph{above} the frame so that it
+never occludes the page, and it is never written to the recording, which stores
+only raw frames.
+
+\noindent\textbf{A human in the control loop.}
+The on-screen feedback and the capture chime close the loop around the operator as
+much as around the software. At the immediate level, the operator can
+force-capture the current frame, undo the last capture, and pause or resume
+auto-capture without looking away from the book. More interestingly, the feedback
+reshapes behavior on its own: operators quickly learn to pause briefly after each
+turn and to flip more deliberately, which raises both the page-flip rate and frame
+crispness with no change to the system itself---the capture process effectively
+trains its own operator. Whether this self-serialization can be deliberately
+cultivated, closing the gap with richer feedback rather than a better algorithm,
+is an intriguing direction for future study. On exit, \sys writes the recording
+alongside the keyframe images and their metadata, the same artifacts the offline
+path produces, so the shared back half (Section~\ref{sec:backhalf}) proceeds
+identically.
 
 \begin{figure*}[t!]
     \centering
     \includegraphics[width=0.97\linewidth]{images/peaks_plot2.png}
-    \caption{Motion-based page-turn detection during book scanning. The top panel shows the smoothed motion signal over the full recording, with detected peaks marked as page turns; the detector identifies 245 page turns, corresponding to 246 scanned spreads. The bottom panel zooms into the first 120 seconds, where alternating shaded bands indicate successive spreads and red markers show detected page-turn events (mean spread duration $\approx 2\,\mathrm{secs}$).}
+    \caption{Motion-based page-turn detection on a representative book scan. The
+    top panel shows the smoothed motion signal over the full recording, with
+    detected peaks marked as page turns; the detector identifies $245$ page
+    turns, corresponding to $246$ scanned spreads. The bottom panel zooms into
+    the first $120$ seconds, where alternating shaded bands indicate successive
+    spreads and red markers show detected page-turn events (mean spread
+    duration $\approx 2$\,seconds).}
     \label{fig:peaks}
 \end{figure*}
 
-\subsubsection{Phase 2: Detect Peaks}
-Page turn events are identified using \texttt{scipy.signal.find\_peaks} on teh smoothed motuion signal. These peaks serve as boundaries where we can select exactly one frame to represent a a unique page/book spread.
-Input: smoothed signal and metadata
-Output:
-    peaks.npy - frame indices of page turns
-    spreads.json - list of boundaries, start, end, duration
-    peaks metadata.json - parameters used, results info
-    peaks plot.png - motion signal w/peaks marked
+\subsection{Offline Keyframe Extraction}
+\label{sec:offline}
 
+\sys also accepts a \emph{pre-recorded} video---archival footage, or a book
+filmed on a phone away from the workstation---and recovers the same per-spread
+keyframes in a batch pass over the finished recording. With the whole signal in
+hand at once, the offline path can segment more deliberately than the causal live
+machine, detecting page turns globally rather than committing to each one as it
+happens.
 
-\subsubsection{Phase 3: Select Keyframes}
-A signle best frame is selected for each spread. The best frame will have the lowest motion value which indicates maximum stillness. If multiple frames have an equal motion score, then image sharpness is used as a tie breaker. 
+\noindent\textbf{Phase 1 --- Motion signal.}
+\sys computes the same inter-frame motion of Equation~\ref{eq:motion} over every
+frame of the recording, now smoothed with a \emph{centered} 15-frame moving
+average $\tilde{m}_t$ (offline, a symmetric window is available). A single
+sequential read at reduced resolution processes a full-length recording cheaply,
+while the averaging suppresses per-frame sensor noise without blurring the
+page-turn bursts.
 
-Input: spreads.json, motion folder, video file
-Output:
-    spreads - keyframes folder holding all selected frames, each full resolution
-    keyframes.json - metadata for each frame (idx, motion, step)
-    selection\_plot.png view where in plot frames are
+\noindent\textbf{Phase 2 --- Page-turn detection.}
+Page turns appear as peaks in $\tilde{m}_t$. We extract them with
+\texttt{scipy.signal.find\_peaks}~\cite{virtanen2020scipy}, requiring a minimum
+height, a minimum inter-peak spacing of $1.5$\,s, and a minimum prominence so
+that text-density flicker within a settled spread is not mistaken for a turn.
+Consecutive peaks bound the per-spread intervals. A second pass rescues fast
+double-turns that the first pass merges: any interval longer than $3$\,s is
+rescanned for two stillness valleys (motion below threshold for at least
+$0.15$\,s) bracketing a motion bump, the signature of a second turn that was
+flipped through quickly, and the bump is inserted as an additional boundary.
+Figure~\ref{fig:peaks} shows the result on a representative book: $245$ detected
+page turns yield $246$ spreads, with a mean spread duration of roughly
+$2$\,seconds.
 
+\noindent\textbf{Phase 3 --- Keyframe selection.}
+Within each spread interval, \sys selects a single representative frame. The
+candidates are the \emph{stillest} frames---those whose smoothed motion falls
+within a small margin of the interval minimum. Among these, the frame with the
+highest sharpness wins, measured as the variance of the Laplacian over the
+central $80\%$ of the frame (the margins are excluded so that a hand or page edge
+entering the border does not inflate the score). The chosen frame is then
+extracted from the source video at full resolution and written to disk. Stillness
+selects the moment the spread is flat and motion-free; the sharpness tiebreaker
+guards against residual focus hunting at that moment.
 
-\subsection{Keyframe Review, Crop \& Split}
+\subsection{Review, Crop, and Assembly}
+\label{sec:backhalf}
 
-\subsubsection{Phase 4: Review Keyframes}
-an interactive user interface displays the selected automatically selected frames. In this step, teh suser is able to delete low culaity frames or duplicate frames as well as add missing frames that might have been skipped by the algorithm. This phase is reentrant and can be run multiple times. 
-Input: Keyframes.json, image files, video file
-Output:
-final\_keyframes.json - final list of frames
-    (e.g. crop-bounds, cover tags)
-review-log.json, annotation notes, what was
-    (e.g. deleted, what was added)
-comparison-plot.png - visual of what was selected
-    what was kept, what was added or deleted
-review summary.txt - just numbers of above
-final\_keyframes - folder with all keyframes kept
-    and added after review in order
+Both front ends converge on a shared back half that turns the per-spread
+keyframes into a finished PDF. One stage is interactive (P4) and the rest are
+automated, with an optional second review (P7) and binarization pass (P8).
 
-\subsubsection{Phase 5: Crop Keyframes}
-Removes table and background from teh keyframe images. It supports videos with two spages in frame or single pages in frame
-Otsu page detection- convert frame to grayscale, seperate bright page from dark background, find the contours of all white reagions, find largest white region which is probably the page, fit rectangle around that largest region and crop it out with given margin
-\begin{itemize}
-    \item \textbf{Input:} \texttt{keyframes.json}, keyframe images, \texttt{review\_log.json} (for crop bounds)
-    \item \textbf{Output:}
-    \begin{itemize}
-        \item Keyframe images cropped in-place in \texttt{images/}
-    \end{itemize}
-\end{itemize}
+\noindent\textbf{Phase 4 --- Keyframe review.}
+An interactive interface presents the selected keyframes in order. The operator
+deletes low-quality or duplicate frames, inserts any spread the detector missed
+(via a frame scrubber over the source video), tags front and back covers, and
+adjusts per-spread geometry. The geometry editor adapts to the capture mode: for
+book spreads it exposes the split (gutter) line and a deskew angle; for loose
+single documents it exposes an adjustable, rotatable crop box. Crucially, a
+manual correction propagates \emph{forward} as a prior to later spreads---the
+rig does not move between page turns, so one adjustment typically fixes a long
+run of frames---which keeps correction the exception rather than a per-frame
+chore. The phase is reentrant and can be revisited as many times as needed
+before proceeding.
 
+\noindent\textbf{Phase 5 --- Crop.}
+Cropping isolates the book from the surrounding table. A grayscale Otsu
+threshold~\cite{otsu1979threshold} fails here because cream-colored pages and a
+light-brown wooden table overlap in luminance and merge into one region.
+Instead, \sys builds the page mask in HSV space, keeping regions of low
+saturation and high value: a page is bright and nearly colorless, whereas a
+tinted table is darker and more saturated, and the distinction is invariant to
+where the spread sits or how it is rotated. From this mask the spread's tilt is
+estimated by a robust (Huber) line fit to its top edge and corrected by
+rotation; the page is then tight-cropped to the mask bounds, with thin
+protrusions---a finger, or an underlying page poking past the edge---rejected by
+keeping only the rows and columns whose page coverage exceeds half the peak. For
+loose single documents, \sys instead segments the page from the table with
+GrabCut~\cite{rother2004grabcut} and perspective-warps the resulting
+quadrilateral to a straight rectangle; an operator's manual crop box from review
+overrides the automatic detection when page sizes vary.
 
-\subsubsection{Phase 6: Split Pages}
-Frames where two pages were places side by side are split into individual pages
-Input: final-keyframes.json, review-log.json + final-keyframes folder containing images
-Output: pages folder, keyframes are split into left and right images
-pages.json - ordered list with metadata
+\noindent\textbf{Phase 6 --- Split.}
+Book spreads are split into two pages at the gutter. Rather than scanning for the
+faint shadow valley between the pages---which a per-column brightness scan
+readily confuses with a text-block edge---\sys places the spine at the book's
+geometric center, the row-wise median of the midpoint between the detected left
+and right page edges. Because a bound book's two pages are equal width, this
+midpoint is exactly where the spine lies, and it tracks the book steadily as it
+shifts in the frame. Manual gutter corrections from review act as priors: near a
+prior, the spine is re-tracked in a tight band but only follows a column that is
+a genuine shadow (measurably darker than the surrounding band). Each resulting
+half then receives a fine text-line deskew via a projection-profile search, since
+page curvature near the spine can skew the two halves differently.
 
-\subsubsection{Phase 7: Page Quality Review (Optional)}
-Interactive GUI for inspecting final page images and flagging quality issues (crop problems, poor image quality). Produces a shareable report for algorithm improvement.
-Input: pages.json + page images
-Output: page-review.json - annotations about the quality of the cropping
-page-review-report.md - shareable report
+\noindent\textbf{Phase 7 --- Page quality review (optional).}
+A second interactive pass lets the operator inspect the final page images, flag
+quality issues such as crop errors or poor focus, and drop pages from the
+output. The annotations are saved as a shareable report that can guide later
+algorithmic improvements.
 
-\subsubsection{Phase 8: Binarize (Optional)}
-Converts page images to black and white using adaptive Gaussian thresholding, computing a per-pixel threshold based on local neighborhood intensity. Suitable for text-heavy documents on thick paper; not recommended for pages with photographs or colored backgrounds.
-Input: pages.json + pages images
-Output: new folder containing all images from pages.json but in black and white
-bw-metadata.json
+\noindent\textbf{Phase 8 --- Binarization (optional).}
+For text-heavy documents on thick paper, \sys can produce clean black-and-white
+pages. A naive adaptive threshold looks grainy, but the grain comes from the
+pipeline around the threshold, not the threshold itself: thresholding at the
+page's native width quantizes each stroke edge onto a coarse grid, and saving
+bitonal pages as JPEG rings around every sharp edge. \sys therefore upscales the
+grayscale image (cubic) before thresholding to anti-alias letter contours,
+applies Sauvola local thresholding~\cite{sauvola2000adaptive}---which tolerates
+a gutter-shadow illumination gradient that a Gaussian adaptive threshold would
+smear into black blotches---de-speckles with a $3\times3$ median that does not
+erode strokes, and writes lossless PNG. This path is not recommended for pages
+with photographs or colored backgrounds.
 
-\subsubsection{Phase 9: Build PDF}
-Assembles individual page images into a PDF document using ReportLab, sizing each page to match the source image aspect ratio.
-Input: pages.json + page images or bw images
-Output: book.pdf - complete pdf
+\noindent\textbf{Phase 9 --- PDF assembly.}
+Finally, the page images are assembled in order into a PDF, each page sized to
+match the aspect ratio of its source image. Binarized pages are embedded
+losslessly (as bitonal CCITT/Flate) rather than re-encoded as JPEG, which would
+reintroduce the very ringing that careful binarization removes.
 
 \end{document}
