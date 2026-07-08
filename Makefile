@@ -21,6 +21,21 @@ SCRIPTS  := scripts
 # Python interpreter. Defaults to the project venv; override with PYTHON=python3.
 PYTHON   ?= .venv/bin/python
 
+# When using the default interpreter, `make install` creates the venv on demand
+# (see the .venv/bin/python rule). An explicit PYTHON=... override is left alone.
+ifeq ($(PYTHON),.venv/bin/python)
+VENV := .venv/bin/python
+endif
+
+# Fail early with a clear message if the interpreter is missing, instead of a
+# cryptic "No such file or directory" from every recipe. Skipped for targets
+# that don't need Python (help, clean) and for install (which bootstraps it).
+ifeq ($(filter install help clean,$(MAKECMDGOALS)),)
+ifeq ($(shell command -v $(PYTHON) >/dev/null 2>&1 && echo ok),)
+$(error Python interpreter '$(PYTHON)' not found. Run 'make install' to create the venv, or override PYTHON=python3)
+endif
+endif
+
 # Phase output markers (new directory structure)
 MOTION    := $(OUTDIR)/data/motion_signal.npy
 PEAKS     := $(OUTDIR)/data/peaks.npy
@@ -142,8 +157,14 @@ $(PDF_BW): $(BW_META)
 probe-camera:
 	$(PYTHON) $(SCRIPTS)/probe_camera.py
 
-install: tkinter
+install: $(VENV) tkinter
 	$(PYTHON) -m pip install -r requirements.txt
+
+# Create the project venv on demand with the system python3. Only used when
+# PYTHON is the default .venv/bin/python (see VENV above); no-op if it exists.
+.venv/bin/python:
+	@echo "Creating .venv with $$(command -v python3)..."
+	python3 -m venv .venv
 
 # tkinter is a system package (not pip-installable). The review GUIs (P4/P7)
 # need it. On macOS install the matching Homebrew package for the active Python.
