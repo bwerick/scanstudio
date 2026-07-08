@@ -18,6 +18,9 @@ NAME     ?= $(basename $(notdir $(VIDEO)))
 OUTDIR   := output/$(NAME)
 SCRIPTS  := scripts
 
+# Python interpreter. Defaults to the project venv; override with PYTHON=python3.
+PYTHON   ?= .venv/bin/python
+
 # Phase output markers (new directory structure)
 MOTION    := $(OUTDIR)/data/motion_signal.npy
 PEAKS     := $(OUTDIR)/data/peaks.npy
@@ -91,7 +94,7 @@ ifeq ($(strip $(NAME)),)
 	$(error NAME is required. Usage: make live NAME=mybook)
 endif
 	@mkdir -p recordings
-	python $(SCRIPTS)/p0_live_capture.py output/$(NAME) recordings/$(NAME).mp4 \
+	$(PYTHON) $(SCRIPTS)/p0_live_capture.py output/$(NAME) recordings/$(NAME).mp4 \
 		--camera $(CAMERA) --settle-threshold $(SETTLE) --turn-threshold $(TURN) \
 		--settle-time $(SETTLE_TIME) --preview-height $(PREVIEW_HEIGHT)
 	@echo "Live capture done. Continue with: make finish VIDEO=recordings/$(NAME).mp4"
@@ -101,54 +104,54 @@ bw: binarize pdf-bw
 
 motion: $(MOTION)
 $(MOTION):
-	python $(SCRIPTS)/p1_motion_signal.py $(VIDEO)
+	$(PYTHON) $(SCRIPTS)/p1_motion_signal.py $(VIDEO)
 
 peaks: $(PEAKS)
 $(PEAKS): $(MOTION)
-	python $(SCRIPTS)/p2_detect_peaks.py $(OUTDIR)
+	$(PYTHON) $(SCRIPTS)/p2_detect_peaks.py $(OUTDIR)
 
 keyframes: $(KEYFRAMES)
 $(KEYFRAMES): $(PEAKS)
-	python $(SCRIPTS)/p3_select_keyframes.py $(OUTDIR) $(VIDEO)
+	$(PYTHON) $(SCRIPTS)/p3_select_keyframes.py $(OUTDIR) $(VIDEO)
 
 review: $(KEYFRAMES)
-	python $(SCRIPTS)/p4_review_keyframes.py $(OUTDIR) $(VIDEO) --mode $(MODE)
+	$(PYTHON) $(SCRIPTS)/p4_review_keyframes.py $(OUTDIR) $(VIDEO) --mode $(MODE)
 
 crop: $(KEYFRAMES)
-	python $(SCRIPTS)/p5_crop.py $(OUTDIR) --mode $(MODE) --safety-margin $(SAFETY_MARGIN)
+	$(PYTHON) $(SCRIPTS)/p5_crop.py $(OUTDIR) --mode $(MODE) --safety-margin $(SAFETY_MARGIN)
 
 split: $(PAGES)
 $(PAGES): $(KEYFRAMES)
-	python $(SCRIPTS)/p6_split_pages.py $(OUTDIR) --mode $(MODE)
+	$(PYTHON) $(SCRIPTS)/p6_split_pages.py $(OUTDIR) --mode $(MODE)
 
 page-review: $(PAGES)
-	python $(SCRIPTS)/p7_review_pages.py $(OUTDIR)
+	$(PYTHON) $(SCRIPTS)/p7_review_pages.py $(OUTDIR)
 
 binarize: $(BW_META)
 $(BW_META): $(PAGES)
-	python $(SCRIPTS)/p8_binarize.py $(OUTDIR) --method $(BW_METHOD) --block-size $(BLOCK_SIZE) --offset $(BW_OFFSET) --upscale $(BW_UPSCALE) --sauvola-k $(BW_K)
+	$(PYTHON) $(SCRIPTS)/p8_binarize.py $(OUTDIR) --method $(BW_METHOD) --block-size $(BLOCK_SIZE) --offset $(BW_OFFSET) --upscale $(BW_UPSCALE) --sauvola-k $(BW_K)
 
 pdf: $(PDF)
 $(PDF): $(PAGES)
-	python $(SCRIPTS)/p9_build_pdf.py $(OUTDIR)
+	$(PYTHON) $(SCRIPTS)/p9_build_pdf.py $(OUTDIR)
 
 pdf-bw: $(PDF_BW)
 $(PDF_BW): $(BW_META)
-	python $(SCRIPTS)/p9_build_pdf.py $(OUTDIR) --source bw --pdf-name $(NAME)_bw.pdf
+	$(PYTHON) $(SCRIPTS)/p9_build_pdf.py $(OUTDIR) --source bw --pdf-name $(NAME)_bw.pdf
 
 probe-camera:
-	python $(SCRIPTS)/probe_camera.py
+	$(PYTHON) $(SCRIPTS)/probe_camera.py
 
 install: tkinter
-	pip install -r requirements.txt
+	$(PYTHON) -m pip install -r requirements.txt
 
 # tkinter is a system package (not pip-installable). The review GUIs (P4/P7)
 # need it. On macOS install the matching Homebrew package for the active Python.
 tkinter:
-	@python -c "import tkinter" 2>/dev/null && echo "tkinter OK" || { \
+	@$(PYTHON) -c "import tkinter" 2>/dev/null && echo "tkinter OK" || { \
 		echo "tkinter missing."; \
 		if [ "$$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then \
-			ver=$$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"); \
+			ver=$$($(PYTHON) -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"); \
 			echo "Installing python-tk@$$ver via Homebrew..."; \
 			brew install python-tk@$$ver; \
 		else \
