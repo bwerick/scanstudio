@@ -14,17 +14,20 @@ Keys:
   4    Delete: Other    5    Cover    6    Doc Start
   I    Insert frame (video scrubber)
   C    Toggle center guide
-  G    Adjust geometry — double: split/rotation; single: crop box
-       Double (←/→ gutter, [ / ] rotate); single (arrows move, ⇧+arrows size,
-       [ / ] tilt). Enter save, Esc cancel, ⌫ reset. Marks the frame Keep.
+  G    Adjust geometry — double: split/rotation/crop; single: crop box
+       Double (←/→ gutter, [ / ] rotate, ⇧↑/↓ crop margin); single (arrows move,
+       ⇧+arrows size, [ / ] tilt). Enter save, Esc cancel, ⌫ reset. Marks Keep.
   ⌘S   Save
 
 Cropping and deskew are automatic (Phase 5). In double mode, G previews that
-result and lets you correct the gutter (split) and rotation per spread. Both
-corrections propagate forward to later spreads until the next correction:
-rotation as a fixed angle, the gutter as a tracking prior — later spreads
-re-detect the spine in a tight band around your last hint, so it follows the
-book as it shifts and a correction stays the exception, not the rule.
+result and lets you correct the gutter (split), rotation, and crop margin per
+spread. Gutter and rotation propagate forward to later spreads until the next
+correction: rotation as a fixed angle, the gutter as a tracking prior — later
+spreads re-detect the spine in a tight band around your last hint, so it follows
+the book as it shifts and a correction stays the exception, not the rule. The
+crop margin (⇧↑ widens, ⇧↓ tightens the breathing room around the spread) is a
+one-off rescue for a spread the auto-crop clipped or left too loose, so it does
+NOT propagate — the default margin already applies everywhere.
 
 Single mode (--mode single) reviews loose one-page-per-frame documents: each
 keyframe is one page, so the gutter overlay is hidden. G instead opens a crop
@@ -59,7 +62,12 @@ from utils import (
     resolve_gutter,
     bring_to_front,
 )
-from p5_crop import crop_double_page, _spread_tilt, detect_page_quad
+from p5_crop import (
+    crop_double_page,
+    _spread_tilt,
+    detect_page_quad,
+    DEFAULT_SAFETY_MARGIN,
+)
 
 ACTIONS = {
     "keep": {"color": "#22c55e", "label": "Keep", "key": "1"},
@@ -229,10 +237,20 @@ class ReviewApp:
         self._split_rot_dirty = False  # True once the operator nudges rotation
         self._split_rot_src = "auto"  # "manual" / "inherited" / "auto", for the HUD
         self._split_gutter_src = "auto"  # "manual" / "tracked" / "auto", for the HUD
+        # Crop margin (breathing room around the spread) for the split editor.
+        # A one-off per-spread override of DEFAULT_SAFETY_MARGIN; unlike gutter/
+        # rotation it does not propagate forward.
+        self._split_margin = DEFAULT_SAFETY_MARGIN
+        self._split_margin_src = "default"  # "manual" / "default", for the HUD
         self._split_cache_key = None
         self._split_crop = None  # cached cropped BGR preview
         self._split_auto_gutter = 0.5
         self._split_resolved_rot = 0.0
+        # Left offset + width of the current crop, in deskewed-frame px, captured
+        # from crop_double_page so a margin change can re-anchor the gutter to the
+        # same physical spine instead of drifting with the crop width.
+        self._split_x0 = 0
+        self._split_cw = 1
         self._split_photo = None  # cached PhotoImage so gutter nudges don't re-resize
         self._split_photo_key = None
         self._split_geom = (0, 0, 1, 1)  # ix0, iy0, dw, dh of the drawn preview
@@ -502,6 +520,8 @@ class ReviewApp:
         if self.split_mode:
             if direction in ("left", "right"):
                 self._split_move(0.002 if direction == "right" else -0.002)
+            elif shift and direction in ("up", "down"):
+                self._split_margin_adjust(0.005 if direction == "up" else -0.005)
         elif self.crop_mode:
             self._crop_arrow(direction, shift)
         elif not self._in_text() and not shift:
@@ -743,6 +763,13 @@ class ReviewApp:
         self._show_current()
 
     # ── Split / deskew adjust ──
+    def _resolve_margin(self, idx):
+        """Crop margin in effect for keyframe ``idx``: own override, else default.
+
+        Unlike gutter/rotation the crop margin does not propagate forward, so
+        this is just the frame's own ``crop_margin`` or the global default."""
+        return self.keyframes[idx].get("crop_margin", DEFAULT_SAFETY_MARGIN)
+
     def _gutter_line(self, idx):
         """Split-line endpoints in raw-frame fractional coords, or None.
 
@@ -769,7 +796,7 @@ class ReviewApp:
             rot = resolve_rotation(self.keyframes, idx)
             if rot is None:
                 rot = _spread_tilt(page_mask(img))
-            cropped, _, (x0, cw_) = crop_double_page(img, 0.005, rot)
+            cropped, _, (x0, cw_) = crop_double_page(img, self._resolve_margin(idx), rot)
             frac = kf.get("gutter")
             if frac is None:
                 # No own override: track the spine near the inherited prior (the
@@ -792,11 +819,12 @@ class ReviewApp:
     def _build_split_preview(self, idx):
         """Crop + deskew the frame exactly as p5 will, caching the result.
 
-        Re-uses p5's ``crop_double_page`` so the gutter measured here (as a
-        fraction of the cropped width) lands where p6 actually splits. Cached by
-        (idx, rotation) so nudging the gutter doesn't re-crop."""
+        Re-uses p5's ``crop_double_page`` with the editor's live crop margin so
+        the gutter measured here (as a fraction of the cropped width) lands where
+        p6 actually splits. Cached by (idx, rotation, margin) so nudging just the
+        gutter doesn't re-crop."""
         rot = self._split_rot
-        key = (idx, None if rot is None else round(rot, 3))
+        key = (idx, None if rot is None else round(rot, 3), round(self._split_margin, 4))
         if key == self._split_cache_key and self._split_crop is not None:
             return
         kf = self.keyframes[idx]
@@ -804,13 +832,15 @@ class ReviewApp:
         if img is None:
             self._split_crop, self._split_auto_gutter = None, 0.5
             self._split_resolved_rot = rot or 0.0
+            self._split_x0, self._split_cw = 0, 1
             self._split_cache_key = key
             return
         if rot is None:
             rot = _spread_tilt(page_mask(img))
-        cropped, _, _ = crop_double_page(img, 0.005, rot)
+        cropped, _, (x0, cw) = crop_double_page(img, self._split_margin, rot)
         gw = max(1, cropped.shape[1])
         self._split_resolved_rot = rot
+        self._split_x0, self._split_cw = x0, cw
         self._split_crop = cropped
         # The auto/ghost gutter tracks the prior inherited from earlier spreads
         # (idx-1, so this frame's own override doesn't seed itself), falling back
@@ -856,6 +886,9 @@ class ReviewApp:
         self._split_gutter_src = (
             "manual" if own_g is not None else "tracked" if prior_g is not None else "auto"
         )
+        # Crop margin baseline: this frame's own one-off override, else default.
+        self._split_margin = self._resolve_margin(idx)
+        self._split_margin_src = "manual" if kf.get("crop_margin") is not None else "default"
         self._split_cache_key = None
         self._build_split_preview(idx)
         # Concretize the baseline angle so [ / ] nudge from the auto value.
@@ -881,6 +914,28 @@ class ReviewApp:
         self._build_split_preview(self.current_idx)
         self._show_current()
 
+    def _split_margin_adjust(self, delta):
+        """Widen (⇧↑) or tighten (⇧↓) the breathing room around the spread.
+
+        Re-crops the preview at the new margin. Because the crop width changes,
+        the gutter is re-anchored so a manually-placed spine stays put instead of
+        sliding with the crop; an un-touched gutter re-seeds from auto detection
+        on the new crop."""
+        if not self.split_mode:
+            return
+        # Absolute spine x in the deskewed frame, from the crop about to change.
+        gx_abs = self._split_x0 + self._split_frac * self._split_cw
+        self._split_margin = max(-0.05, min(0.20, self._split_margin + delta))
+        self._split_margin_src = "manual"
+        self._build_split_preview(self.current_idx)
+        if self._split_gutter_src == "manual":
+            self._split_frac = max(
+                0.05, min(0.95, (gx_abs - self._split_x0) / max(1, self._split_cw))
+            )
+        else:
+            self._split_frac = self._split_auto_gutter
+        self._show_current()
+
     def _split_reset(self):
         if not self.split_mode:
             return
@@ -888,6 +943,7 @@ class ReviewApp:
         kf.pop("gutter", None)
         kf.pop("gutter_raw", None)
         kf.pop("rotation_deg", None)
+        kf.pop("crop_margin", None)
         # Removing a rotation changes what later frames inherit, so drop all
         # cached split lines, not just this frame's.
         self._gutter_cache.clear()
@@ -898,6 +954,9 @@ class ReviewApp:
         idx = self.current_idx
         prior_g = resolve_gutter(self.keyframes, idx - 1) if idx > 0 else None
         self._split_gutter_src = "tracked" if prior_g is not None else "auto"
+        # Crop margin doesn't propagate, so a reset always lands back on default.
+        self._split_margin = DEFAULT_SAFETY_MARGIN
+        self._split_margin_src = "default"
         self._split_cache_key = None
         self._build_split_preview(self.current_idx)
         self._split_rot = self._split_resolved_rot
@@ -912,9 +971,17 @@ class ReviewApp:
         kf.pop("gutter_raw", None)  # legacy field from older sessions
         if self._split_rot_dirty:
             kf["rotation_deg"] = round(self._split_rot, 3)
+        # Store the crop margin only when it differs from the default; a value
+        # left at (or reset to) default carries no override so the field is
+        # dropped, keeping keyframes.json clean.
+        if abs(self._split_margin - DEFAULT_SAFETY_MARGIN) > 1e-6:
+            kf["crop_margin"] = round(self._split_margin, 4)
+        else:
+            kf.pop("crop_margin", None)
         # Both the gutter and rotation now propagate forward as defaults, so a
         # confirm changes every later frame's inherited split line — invalidate
-        # the whole cache, not just this frame's.
+        # the whole cache, not just this frame's. (The margin is this frame's
+        # own, but a full clear is the safe superset.)
         self._gutter_cache.clear()
         self.session_log.append(
             {
@@ -923,6 +990,7 @@ class ReviewApp:
                 "frame": kf["frame_index"],
                 "gutter": kf["gutter"],
                 "rotation_deg": kf.get("rotation_deg"),
+                "crop_margin": kf.get("crop_margin"),
             }
         )
         self.split_mode = False
@@ -979,6 +1047,7 @@ class ReviewApp:
             text=(
                 f"SPLIT — ←/→ gutter  [ / ] rotate "
                 f"({self._split_resolved_rot:+.2f}° {self._split_rot_src})  "
+                f"⇧↑/↓ crop ({self._split_margin:+.1%} {self._split_margin_src})  "
                 f"Enter save  Esc cancel  ⌫ reset   "
                 f"gutter={self._split_frac:.3f} {self._split_gutter_src}"
             ),

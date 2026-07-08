@@ -12,7 +12,7 @@ Modifies images/ in-place. To restore originals, re-run Phase 3.
 Usage:
   python scripts/p5_crop.py output/mybook
   python scripts/p5_crop.py output/mybook --mode single
-  python scripts/p5_crop.py output/mybook --mode double --safety-margin 0.005
+  python scripts/p5_crop.py output/mybook --mode double --safety-margin 0.02
 """
 
 import argparse
@@ -25,6 +25,14 @@ import cv2
 import numpy as np
 
 from utils import log, ProjectPaths, check_overwrite, page_mask, resolve_rotation
+
+# Breathing room kept around the detected spread bounds, as a fraction of the
+# frame. Bumped up from a hair-thin 0.005 because a tight crop that clips real
+# page content is far worse than a little extra table in the margin (the split
+# step finds the gutter regardless, and the binarizer drops the border). Phase 4
+# imports this so its split preview matches, and it is the per-frame default that
+# a keyframe's own ``crop_margin`` override replaces.
+DEFAULT_SAFETY_MARGIN = 0.02
 
 # ── Double-page crop (books) ─────────────────────────────────
 
@@ -276,8 +284,10 @@ def main():
     parser.add_argument(
         "--safety-margin",
         type=float,
-        default=0.005,
-        help="Otsu safety margin for double mode (default: 0.005)",
+        default=DEFAULT_SAFETY_MARGIN,
+        help="Default breathing room around the spread for double mode, as a "
+        f"fraction of the frame (default: {DEFAULT_SAFETY_MARGIN}). A keyframe's "
+        "own crop_margin override (set with G in Phase 4) takes precedence.",
     )
     parser.add_argument(
         "--padding",
@@ -368,9 +378,12 @@ def main():
             # Step 2: Otsu page detection
             if not args.no_otsu and not is_cover:
                 # Manual deskew corrections propagate forward to later spreads
-                # (the rig doesn't move between page turns).
+                # (the rig doesn't move between page turns). A per-spread crop
+                # margin (set with G in Phase 4) is a one-off override of the
+                # default breathing room, so it does NOT propagate.
                 rot = resolve_rotation(keyframes, i)
-                cropped, method, _ = crop_double_page(img, args.safety_margin, rot)
+                margin = kf.get("crop_margin", args.safety_margin)
+                cropped, method, _ = crop_double_page(img, margin, rot)
             else:
                 cropped = img
                 method = "bounds_only" if crop else "none"
