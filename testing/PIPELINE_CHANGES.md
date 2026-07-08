@@ -20,10 +20,10 @@ The benchmarking pipeline has been completely redesigned to test whether OCR-dig
 - **Focus**: Exercise answering quality
 - **Conditions**:
   - **Baseline**: LLM answers with no context
-  - **Raw OCR**: LLM answers with raw embedded PDF text
-  - **Corrected OCR**: LLM answers with OLMoCR-corrected text
+  - **Raw Text**: LLM answers with embedded PDF text (no OCR - just PDF text layer)
+  - **Corrected OCR**: LLM answers with OLMoCR-processed text (actual OCR with correction)
 - **Evaluation**: LLM scoring (0-10 scale) against reference answers
-- **OCR Engines**: PyMuPDF + LLM-based correction (OLMoCR approach)
+- **Text Sources**: Embedded PDF text (raw) vs **OLMoCR v0.4.0** (allenai/olmOCR-2-7B-1025-FP8)
 
 ## Key Improvements
 
@@ -51,6 +51,29 @@ benchmark-results/
 ├── exercises/
 └── benchmark/
 ```
+
+## Installation & Requirements
+
+### Install OLMoCR
+
+```bash
+# For CPU or remote inference (lightweight, ~2GB)
+pip install olmocr
+
+# For local GPU inference (requires NVIDIA GPU with 12GB+ RAM)
+pip install olmocr[gpu] --extra-index-url https://download.pytorch.org/whl/cu128
+
+# Other dependencies
+pip install pymupdf openai tqdm
+```
+
+### System Requirements
+
+- **Raw OCR**: No GPU needed (PyMuPDF)
+- **Corrected OCR**: Requires one of:
+  - NVIDIA GPU (12GB+ VRAM, 30GB disk space)
+  - Remote OLMoCR server endpoint
+- **Exercise Extraction & Evaluation**: OpenAI API key
 
 ## Usage
 
@@ -109,10 +132,10 @@ python testing/full_benchmark_pipeline.py benchmark \
 
 ## Research Question
 
-**Does OCR correction improve an LLM's ability to answer exercises from books?**
+**Does OCR-digitizing books (with OLMoCR) improve an LLM's ability to answer exercises compared to using embedded PDF text?**
 
 The pipeline directly compares:
-- **Raw OCR** (baseline OCR quality)
-- **Corrected OCR** (OLMoCR-improved quality)
+- **Raw Embedded Text** (PDF's built-in text layer - no OCR)
+- **OLMoCR Text** (actual OCR with AI-powered correction)
 
-The difference in average scores shows the impact of OCR correction on downstream LLM performance.
+The difference in average scores shows whether OCR-digitizing adds value over just using embedded PDF text for downstream LLM tasks.

@@ -1,0 +1,12 @@
+# Core dependencies
+pymupdf>=1.23.0
+openai>=1.0.0
+tqdm>=4.65.0
+
+# OLMoCR - choose one:
+# For CPU/remote inference (lightweight):
+olmocr>=0.4.0
+
+# For GPU inference, use instead:
+# olmocr[gpu]>=0.4.0
+# Install with: pip install olmocr[gpu] --extra-index-url https://download.pytorch.org/whl/cu128

@@ -37,6 +37,9 @@ import os
 import sys
 import argparse
 import json
+import subprocess
+import tempfile
+import shutil
 from pathlib import Path
 from typing import List, Dict, Optional
 from openai import OpenAI
@@ -62,11 +65,12 @@ class ExerciseBenchmarkPipeline:
         self.client = OpenAI(api_key=api_key or os.environ.get("OPENAI_API_KEY"))
 
     def extract_ocr(self, pdf_path: str, max_pages: int = None):
-        """Extract raw OCR and apply OLMoCR correction"""
+        """Extract embedded PDF text and apply OLMoCR correction"""
         pdf_path = Path(pdf_path)
 
         print(f"\n{'='*60}")
-        print("STEP 1: EXTRACT RAW OCR (PyMuPDF Embedded Text)")
+        print("STEP 1: EXTRACT EMBEDDED TEXT FROM PDF")
+        print("(No OCR - just extracting built-in text layer)")
         print(f"{'='*60}")
 
         doc = pymupdf.open(pdf_path)
@@ -75,6 +79,7 @@ class ExerciseBenchmarkPipeline:
         print(f"Processing {total_pages} pages...")
         for page_num in range(total_pages):
             page = doc[page_num]
+            # Extract embedded text (NOT OCR - just the text layer in the PDF)
             text = page.get_text()
 
             page_name = f"page_{page_num+1:04d}"
@@ -83,52 +88,116 @@ class ExerciseBenchmarkPipeline:
             if (page_num + 1) % 50 == 0:
                 print(f"  {page_num + 1}/{total_pages} pages...")
 
-        print(f"✓ Raw OCR: {total_pages} pages")
+        print(f"✓ Embedded text extracted: {total_pages} pages")
+        print(f"   Note: If PDF has no embedded text, provide text files manually in {self.raw_ocr_dir}/")
 
         print(f"\n{'='*60}")
-        print("STEP 2: CORRECT OCR USING OLMoCR")
+        print("STEP 2: CORRECT OCR USING OLMoCR (allenai/olmOCR-2-7B-1025-FP8)")
         print(f"{'='*60}")
 
-        print(f"Processing {total_pages} pages with OLMoCR...")
-        for page_num in range(total_pages):
-            page_name = f"page_{page_num+1:04d}"
-            raw_text = (self.raw_ocr_dir / f"{page_name}.txt").read_text()
+        # Create a temporary PDF with only the pages we need
+        if max_pages:
+            print(f"Creating temporary PDF with first {max_pages} pages...")
+            temp_pdf = self.output_dir / "temp_input.pdf"
+            temp_doc = pymupdf.open()
+            for page_num in range(total_pages):
+                temp_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
+            temp_doc.save(temp_pdf)
+            temp_doc.close()
+            pdf_to_process = temp_pdf
+        else:
+            pdf_to_process = pdf_path
 
-            # Apply OLMoCR correction via LLM
-            corrected_text = self.correct_with_olmocr(raw_text)
-            (self.corrected_ocr_dir / f"{page_name}.txt").write_text(corrected_text)
+        doc.close()
 
-            if (page_num + 1) % 10 == 0:
-                print(f"  {page_num + 1}/{total_pages} pages...")
+        # Run OLMoCR
+        self.run_olmocr(pdf_to_process)
+
+        # Clean up temp PDF
+        if max_pages and temp_pdf.exists():
+            temp_pdf.unlink()
 
         print(f"✓ Corrected OCR: {total_pages} pages")
 
-    def correct_with_olmocr(self, raw_text: str) -> str:
-        """Correct OCR text using LLM-based correction (OLMoCR approach)"""
-        prompt = f"""You are an OCR correction system. Fix the following OCR text by:
-1. Correcting obvious OCR errors (e.g., 'rn' → 'm', 'vv' → 'w')
-2. Fixing broken words and spacing issues
-3. Preserving the original structure and formatting
-4. NOT adding or removing content - only fix errors
+    def run_olmocr(self, pdf_path: Path):
+        """Run OLMoCR CLI to process PDF and extract corrected text"""
+        # Create temporary workspace for OLMoCR
+        with tempfile.TemporaryDirectory() as temp_workspace:
+            temp_workspace_path = Path(temp_workspace)
 
-Return ONLY the corrected text with no explanations.
+            print(f"Running OLMoCR on {pdf_path.name}...")
+            print("This may take several minutes depending on the number of pages...")
 
-OCR Text:
-{raw_text}
+            try:
+                # Run olmocr CLI
+                cmd = [
+                    "olmocr",
+                    str(temp_workspace_path),
+                    "--markdown",
+                    "--pdfs", str(pdf_path)
+                ]
 
-Corrected Text:"""
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
 
-        try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o",
-                max_tokens=8000,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            print(f"Warning: OCR correction failed: {e}")
-            return raw_text  # Return original on error
+                print("✓ OLMoCR processing complete")
+
+                # Parse OLMoCR output
+                self.parse_olmocr_output(temp_workspace_path)
+
+            except subprocess.CalledProcessError as e:
+                print(f"✗ OLMoCR failed: {e}")
+                print(f"stdout: {e.stdout}")
+                print(f"stderr: {e.stderr}")
+                raise
+            except FileNotFoundError:
+                print("✗ OLMoCR not found. Please install it first:")
+                print("   pip install olmocr")
+                print("   Or for GPU: pip install olmocr[gpu] --extra-index-url https://download.pytorch.org/whl/cu128")
+                raise
+
+    def parse_olmocr_output(self, workspace_path: Path):
+        """Parse OLMoCR markdown output and save as individual page text files"""
+        # OLMoCR saves output as markdown files
+        md_files = list(workspace_path.glob("**/*.md"))
+
+        if not md_files:
+            print("Warning: No markdown output found from OLMoCR")
+            return
+
+        # Assuming single PDF, get the first markdown file
+        md_file = md_files[0]
+        content = md_file.read_text()
+
+        # Split by page markers if present, or treat as single document
+        # OLMoCR outputs full document markdown, we need to split by pages
+        # For now, we'll try to parse the JSONL output instead
+        jsonl_files = list(workspace_path.glob("**/*.jsonl"))
+
+        if jsonl_files:
+            jsonl_file = jsonl_files[0]
+            with open(jsonl_file) as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    data = json.loads(line)
+
+                    # Extract page-by-page content
+                    if 'pages' in data:
+                        for page in data['pages']:
+                            page_num = page.get('page_num', 0)
+                            text = page.get('response', {}).get('text', '')
+
+                            page_name = f"page_{page_num:04d}"
+                            (self.corrected_ocr_dir / f"{page_name}.txt").write_text(text)
+        else:
+            # Fallback: save entire markdown as single file and warn
+            print("Warning: Could not find JSONL output, saving entire markdown")
+            (self.corrected_ocr_dir / "page_0001.txt").write_text(content)
 
     def extract_exercises(self, max_exercises: int = None):
         """Extract exercises from corrected OCR"""

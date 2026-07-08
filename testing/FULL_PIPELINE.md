@@ -5,8 +5,33 @@
 This pipeline tests whether OCR-digitizing books improves an LLM's ability to answer exercises from those books. We compare 3 conditions per exercise:
 
 - **Baseline**: LLM answers with no context (general knowledge only)
-- **Raw OCR**: LLM answers with raw OCR text of the relevant chapter as context (embedded PDF text)
-- **Corrected OCR**: LLM answers with LLM-corrected OCR text of the relevant chapter as context (OLMoCR)
+- **Raw Text**: LLM answers with raw embedded text from PDF (no OCR - just the PDF's text layer)
+- **Corrected OCR**: LLM answers with OLMoCR-corrected text (actual OCR with correction)
+
+## Installation
+
+### Prerequisites
+
+```bash
+# Install OLMoCR (choose one based on your setup)
+
+# For CPU or remote inference (lightweight, ~2GB)
+pip install olmocr
+
+# For local GPU inference (requires NVIDIA GPU with 12GB+ RAM, 30GB disk)
+pip install olmocr[gpu] --extra-index-url https://download.pytorch.org/whl/cu128
+
+# Other dependencies
+pip install pymupdf openai tqdm
+```
+
+### System Requirements
+
+- **For Raw OCR**: PyMuPDF (no GPU needed)
+- **For Corrected OCR**: OLMoCR requires either:
+  - NVIDIA GPU (12GB+ VRAM) for local processing
+  - Remote OLMoCR server endpoint
+- **For Exercise Extraction**: OpenAI API key
 
 ## Full Workflow
 
@@ -21,11 +46,12 @@ python testing/full_benchmark_pipeline.py extract \
 ```
 
 **What this does:**
-1. Extracts **Raw OCR** (PyMuPDF embedded text) → `benchmark-results/raw_ocr/`
-2. Extracts **Corrected OCR** (OLMoCR) → `benchmark-results/corrected_ocr/`
-3. Extracts **Exercises** from book → `benchmark-results/exercises/extracted_exercises.json`
+1. Extracts **Raw Text** (embedded PDF text, no OCR) → `benchmark-results/raw_ocr/`
+   - If PDF has no embedded text, you can provide text files manually
+2. Runs **OLMoCR** (actual OCR with correction) → `benchmark-results/corrected_ocr/`
+3. Extracts **Exercises** from corrected text → `benchmark-results/exercises/extracted_exercises.json`
 
-**Time:** ~30-90 min on Legion GPU for full book (OLMoCR is more intensive)
+**Time:** ~30-90 min on GPU for full book (OLMoCR requires GPU)
 
 ### Step 2: Add Reference Answers
 
@@ -133,10 +159,10 @@ python testing/full_benchmark_pipeline.py benchmark --results-dir "results"
 
 ```
 benchmark-results/
-├── raw_ocr/            # PyMuPDF embedded text extraction
-│   ├── page_0001.txt
+├── raw_ocr/            # Embedded PDF text (no OCR)
+│   ├── page_0001.txt   # Can be manually provided if PDF has no text layer
 │   └── ...
-├── corrected_ocr/      # OLMoCR corrected text
+├── corrected_ocr/      # OLMoCR output (actual OCR with correction)
 │   ├── page_0001.txt
 │   └── ...
 ├── exercises/          # Extracted exercises
@@ -149,8 +175,8 @@ benchmark-results/
 
 The benchmark will show:
 - **Baseline performance** (LLM general knowledge)
-- **Impact of raw OCR** (does embedded PDF text help?)
-- **Impact of corrected OCR** (does OLMoCR correction improve answers?)
-- **OCR correction benefit** (difference between raw and corrected)
+- **Impact of raw text** (does embedded PDF text help?)
+- **Impact of OLMoCR** (does actual OCR with correction outperform raw text?)
+- **OCR benefit** (difference between raw embedded text and OLMoCR)
 
-This quantifies whether OCR-digitizing books improves an LLM's ability to answer exercises from those books!
+This quantifies whether OCR-digitizing books (using OLMoCR) improves an LLM's ability to answer exercises compared to just using embedded PDF text!
