@@ -14,27 +14,31 @@ Keys:
   4    Delete: Other    5    Cover    6    Doc Start
   I    Insert frame (video scrubber)
   C    Toggle center guide
-  G    Adjust geometry — double: split/rotation/crop; single: crop box
-       Double (←/→ gutter, [ / ] rotate, ⇧↑/↓ crop margin); single (arrows move,
-       ⇧+arrows size, [ / ] tilt). Enter save, Esc cancel, ⌫ reset. Marks Keep.
+  G    Adjust geometry — double: crop box + gutter; single: crop box
+       Mouse: drag inside the box to move it, drag a corner or edge to resize,
+       drag the gutter line to move the split. Keys: [ / ] tilt, ⇧+arrows
+       resize; double adds ←/→ gutter + ↑/↓ move, single arrows move.
+       Enter save, Esc cancel, ⌫ reset. Marks Keep.
   ⌘S   Save
 
-Cropping and deskew are automatic (Phase 5). In double mode, G previews that
-result and lets you correct the gutter (split), rotation, and crop margin per
-spread. Gutter and rotation propagate forward to later spreads until the next
-correction: rotation as a fixed angle, the gutter as a tracking prior — later
-spreads re-detect the spine in a tight band around your last hint, so it follows
-the book as it shifts and a correction stays the exception, not the rule. The
-crop margin (⇧↑ widens, ⇧↓ tightens the breathing room around the spread) is a
-one-off rescue for a spread the auto-crop clipped or left too loose, so it does
-NOT propagate — the default margin already applies everywhere.
+Cropping and deskew are automatic (Phase 5) until corrected. In double mode, G
+opens a geometry editor on the raw frame: a rotated crop box around the spread
+with the gutter (split) line inside it. Corrections propagate forward to later
+spreads until the next correction: the box and its tilt as fixed values (the
+rig doesn't move between page turns), the gutter as a tracking prior — later
+spreads re-detect the spine in a tight band around your last hint, so it
+follows the book as it shifts and a correction stays the exception, not the
+rule. Until the box is touched, Phase 5 keeps auto-detecting the spread (page
+mask + safety margin); once a box is confirmed it is stored as 4 fractional
+corners (``crop_quad``) and Phase 5 warps exactly that box.
 
 Single mode (--mode single) reviews loose one-page-per-frame documents: each
-keyframe is one page, so the gutter overlay is hidden. G instead opens a crop
-editor — an adjustable rotated rectangle over the raw frame (move/resize/tilt) —
-because GrabCut auto-crop (Phase 5) can clip real text or wander when page sizes
-vary across frames. Confirming stores the box as 4 corners on the keyframe;
-Phase 5 warps exactly that box instead of auto-detecting.
+keyframe is one page, so the gutter overlay is hidden. G opens the same crop
+box editor (minus the gutter) because GrabCut auto-crop (Phase 5) can clip real
+text or wander when page sizes vary across frames. Confirming stores the box as
+4 corners on the keyframe; Phase 5 warps exactly that box instead of
+auto-detecting. Unlike double mode the box does NOT propagate — loose pages
+move and resize between frames.
 """
 
 import argparse, json, sys, time, shutil, os
@@ -60,10 +64,12 @@ from utils import (
     page_mask,
     resolve_rotation,
     resolve_gutter,
+    resolve_crop_quad,
     bring_to_front,
 )
 from p5_crop import (
     crop_double_page,
+    crop_to_quad,
     _spread_tilt,
     detect_page_quad,
     DEFAULT_SAFETY_MARGIN,
@@ -228,50 +234,36 @@ class ReviewApp:
         self.show_center_guide = False
         self.session_log = []
 
-        # Split / deskew adjust (overrides stored per-keyframe in keyframes.json).
-        # Cropping/deskew themselves are automatic in Phase 5; G only tunes the
-        # gutter and rotation of that auto result.
+        # Split / geometry adjust, double mode (overrides stored per-keyframe
+        # in keyframes.json). Until the operator touches the crop box, cropping
+        # and deskew stay automatic in Phase 5; a confirmed box is stored as
+        # crop_quad and propagates forward (see resolve_crop_quad).
         self.split_mode = False
-        self._split_frac = 0.5  # gutter as fraction of cropped spread width
-        self._split_rot = None  # deskew angle (deg); None = auto until resolved
-        self._split_rot_dirty = False  # True once the operator nudges rotation
-        self._split_rot_src = "auto"  # "manual" / "inherited" / "auto", for the HUD
+        self._split_frac = 0.5  # gutter as fraction of the crop box's width
+        self._split_auto_gutter = 0.5  # detector's suggestion, for the ghost line
         self._split_gutter_src = "auto"  # "manual" / "tracked" / "auto", for the HUD
-        # Crop margin (breathing room around the spread) for the split editor.
-        # A one-off per-spread override of DEFAULT_SAFETY_MARGIN; unlike gutter/
-        # rotation it does not propagate forward.
-        self._split_margin = DEFAULT_SAFETY_MARGIN
-        self._split_margin_src = "default"  # "manual" / "default", for the HUD
-        self._split_cache_key = None
-        self._split_crop = None  # cached cropped BGR preview
-        self._split_auto_gutter = 0.5
-        self._split_resolved_rot = 0.0
-        # Left offset + width of the current crop, in deskewed-frame px, captured
-        # from crop_double_page so a margin change can re-anchor the gutter to the
-        # same physical spine instead of drifting with the crop width.
-        self._split_x0 = 0
-        self._split_cw = 1
-        self._split_photo = None  # cached PhotoImage so gutter nudges don't re-resize
-        self._split_photo_key = None
-        self._split_geom = (0, 0, 1, 1)  # ix0, iy0, dw, dh of the drawn preview
-        self._gutter_cache = {}  # idx -> split-line endpoints (raw-frame fractions)
+        self._split_box_src = "auto"  # "manual" / "inherited" / "auto", for the HUD
+        self._split_box_dirty = False  # True once the operator changes the box
+        self._geom_cache = {}  # idx -> {"box","box_src","line"} raw-frame fractions
 
-        # Crop adjust (single mode). The crop is a rotated rectangle over the raw
-        # frame — move/resize/tilt it, and the 4 corners are stored per-keyframe
-        # (as fractions of the frame) so Phase 5 warps that box instead of
-        # auto-detecting. GrabCut auto-crop can clip real text or wander when
-        # page sizes vary across frames (receipts), so this is the manual escape.
+        # Crop box editor state, shared by both editors (they are mutually
+        # exclusive): a rotated rectangle over the raw frame as center/size/
+        # angle. Double mode adds the gutter line; single mode stores the box
+        # per-frame with no propagation. GrabCut auto-crop can clip real text
+        # or wander when page sizes vary across frames (receipts), so this is
+        # the manual escape.
         self.crop_mode = False
         self._crop_cx = self._crop_cy = 0.0  # box center, raw-frame px
         self._crop_w = self._crop_h = 0.0  # box size, raw-frame px
         self._crop_angle = 0.0  # tilt, degrees
         self._crop_W = self._crop_H = 1  # frame dims, for step sizing + clamps
-        self._crop_src = "auto"  # "auto" / "manual", for the HUD
-        self._crop_base_photo = None  # cached base frame so nudges only redraw the box
+        self._crop_src = "auto"  # "auto" / "manual", for the single-mode HUD
+        self._crop_base_photo = None  # cached base frame so edits only redraw overlay
         self._crop_base_key = None
         self._crop_geom = (0, 0, 1.0)  # ix0, iy0, px->canvas scale of the drawn frame
-        # idx -> auto-crop box (fractional corners) for the always-on preview,
-        # computed lazily on first view and cached (like _gutter_cache).
+        self._drag = None  # active mouse drag: {"kind": ..., ...}
+        # idx -> auto-crop box (fractional corners) for the single-mode preview,
+        # computed lazily on first view and cached (like _geom_cache).
         self._crop_preview_cache = {}
 
         # Restore cover/doc_start from keyframe data
@@ -325,6 +317,13 @@ class ReviewApp:
         self.canvas = tk.Canvas(img_frame, bg="#111", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True, padx=12, pady=4)
         self.canvas.bind("<Configure>", lambda e: self._show_current())
+        # The geometry editors are mouse-first: drag the box, its corners and
+        # edges, or the gutter line. Outside an editor the canvas ignores the
+        # mouse entirely.
+        self.canvas.bind("<Button-1>", self._on_mouse_down)
+        self.canvas.bind("<B1-Motion>", self._on_mouse_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_mouse_up)
+        self.canvas.bind("<Motion>", self._on_mouse_hover)
 
         nav = tk.Frame(img_frame, bg=bg)
         nav.pack(pady=(0, 8))
@@ -398,7 +397,7 @@ class ReviewApp:
         # G means "edit geometry": the spread split in double mode, the crop box
         # in single mode (where each frame is already one page).
         split_hint = (
-            "G Split    (auto-crop)\n"
+            "G Split    (crop box)\n"
             if self.mode == "double"
             else "G Crop     (adjust box)\n"
         )
@@ -518,10 +517,15 @@ class ReviewApp:
 
     def _on_arrow(self, direction, shift=False):
         if self.split_mode:
-            if direction in ("left", "right"):
+            if shift:
+                # Resize the box about its center: ⇧←/→ width, ⇧↑/↓ height.
+                self._apply_box_change(lambda: self._box_resize_key(direction))
+            elif direction in ("left", "right"):
                 self._split_move(0.002 if direction == "right" else -0.002)
-            elif shift and direction in ("up", "down"):
-                self._split_margin_adjust(0.005 if direction == "up" else -0.005)
+            else:
+                # ↑/↓ nudge the box vertically (←/→ belongs to the gutter;
+                # pan sideways with the mouse).
+                self._apply_box_change(lambda: self._box_pan_vertical(direction))
         elif self.crop_mode:
             self._crop_arrow(direction, shift)
         elif not self._in_text() and not shift:
@@ -585,6 +589,7 @@ class ReviewApp:
         if self.crop_mode:
             self._render_crop(cw, ch)
             return
+        self.canvas.configure(cursor="")  # clear any editor hover cursor
 
         try:
             img = Image.open(img_path)
@@ -625,21 +630,32 @@ class ReviewApp:
                     dash=(6, 4),
                 )
 
-            # Show the split line exactly where p6 will cut: computed on the
-            # cropped/deskewed spread (same path as G and Phase 5) and mapped
-            # back onto this raw frame — including the tilt, since the cut is
-            # vertical only in deskewed space. The dash pattern shows where the
-            # line comes from: solid = this spread's own override, long dashes =
-            # tracked from an earlier correction, short dashes = pure auto guess.
-            # Press G to tune it. Single mode has no spine, so skip it entirely.
+            # Show the crop box p5 will cut out and the split line p6 will cut
+            # at, both computed on the same geometry (see _frame_geometry) and
+            # drawn on this raw frame — tilt included. Dash patterns show
+            # provenance: solid = this spread's own override, long dashes =
+            # propagated/tracked from an earlier correction, short dashes =
+            # pure auto guess. Press G to tune. Single mode has no spine, so
+            # skip it entirely.
             is_cover = kf.get("is_cover") or self.actions.get(idx) == "cover"
             if self.mode == "double" and not is_cover:
-                own = kf.get("gutter") is not None
-                tracked = (not own) and resolve_gutter(self.keyframes, idx) is not None
-                dash = () if own else (8, 3) if tracked else (4, 4)
-                line = self._gutter_line(idx)
-                if line:
-                    (fxa, fya), (fxb, fyb) = line
+                geom = self._frame_geometry(idx)
+                if geom:
+                    box_dash = {"manual": (), "inherited": (8, 3)}.get(
+                        geom["box_src"], (4, 4)
+                    )
+                    pts = []
+                    for fx, fy in geom["box"]:
+                        pts += [ix0 + fx * dw, iy0 + fy * dh]
+                    self.canvas.create_polygon(
+                        pts, outline="#22ff66", fill="", width=2, dash=box_dash
+                    )
+                    own = kf.get("gutter") is not None
+                    tracked = (not own) and resolve_gutter(
+                        self.keyframes, idx
+                    ) is not None
+                    dash = () if own else (8, 3) if tracked else (4, 4)
+                    (fxa, fya), (fxb, fyb) = geom["line"]
                     self.canvas.create_line(
                         ix0 + fxa * dw,
                         iy0 + fya * dh,
@@ -748,7 +764,7 @@ class ReviewApp:
         for k, v in self.actions.items():
             new_actions[k + 1 if k >= insert_at else k] = v
         self.actions = new_actions
-        self._gutter_cache.clear()  # indices shifted
+        self._geom_cache.clear()  # indices shifted
         self._crop_preview_cache.clear()
 
         self.pending_inserts.append(new_kf)
@@ -762,92 +778,107 @@ class ReviewApp:
         )
         self._show_current()
 
-    # ── Split / deskew adjust ──
+    # ── Split / geometry adjust (double mode) ──
     def _resolve_margin(self, idx):
-        """Crop margin in effect for keyframe ``idx``: own override, else default.
+        """Auto-crop margin for keyframe ``idx``: own override, else default.
 
-        Unlike gutter/rotation the crop margin does not propagate forward, so
-        this is just the frame's own ``crop_margin`` or the global default."""
+        Only feeds the auto crop on frames without a manual box (and the
+        editor's auto seed). ``crop_margin`` is a legacy one-off from older
+        review sessions — confirming a box replaces it — and it does not
+        propagate forward."""
         return self.keyframes[idx].get("crop_margin", DEFAULT_SAFETY_MARGIN)
 
-    def _gutter_line(self, idx):
-        """Split-line endpoints in raw-frame fractional coords, or None.
+    @staticmethod
+    def _auto_spread_quad(img, margin, rot):
+        """The auto crop as a box on the raw frame: 4 px corners + the crop.
 
-        Reproduces the p5→p6 path at full resolution: crop + deskew with the
-        resolved rotation (own override, inherited, or auto), take the gutter
-        override or detect it on the crop, then map that vertical line back
-        through the inverse rotation onto the raw frame. The line drawn in
-        review is therefore the line p6 will actually cut, tilt included.
+        Runs p5's ``crop_double_page`` and maps the resulting axis-aligned
+        rectangle back through the inverse deskew rotation, giving the quad an
+        editor or preview can draw on the raw frame. Returns
+        ``(quad_px, cropped)`` — the corners as (tl, tr, br, bl) and the
+        cropped BGR image for gutter detection."""
+        h, w = img.shape[:2]
+        cropped, method, (x0, y0, cw_, ch_) = crop_double_page(img, margin, rot)
+        # crop_double_page only rotates when the angle is meaningful; the
+        # fallback path never rotates at all. Mirror that so the box maps back
+        # through the rotation that was actually applied.
+        applied = 0.0 if (method == "fallback" or abs(rot) <= 0.2) else rot
+        corners = np.array(
+            [
+                [x0, y0, 1.0],
+                [x0 + cw_, y0, 1.0],
+                [x0 + cw_, y0 + ch_, 1.0],
+                [x0, y0 + ch_, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        if applied:
+            M = cv2.getRotationMatrix2D((w / 2, h / 2), applied, 1.0)
+            pts = corners @ cv2.invertAffineTransform(M).T
+        else:
+            pts = corners[:, :2]
+        return [(float(x), float(y)) for x, y in pts], cropped
 
-        Must use the same full-resolution crop as ``_build_split_preview``: the
-        page mask, tilt, and bounds are resolution-dependent (a downscale can
-        even flip ``crop_double_page`` into its whole-frame fallback when the
-        spread doesn't fill the frame), so cropping a downscaled copy here would
-        land the green line in a different place than the split editor shows for
-        the same gutter fraction. Cached per frame; invalidated when an override
-        changes."""
-        if idx in self._gutter_cache:
-            return self._gutter_cache[idx]
+    def _frame_geometry(self, idx):
+        """Crop box + split line for the always-on preview, or None.
+
+        Reproduces the p5→p6 path at full resolution: the manual crop box in
+        effect (own or propagated from an earlier correction), else the auto
+        crop (page mask + margin) mapped back through the deskew rotation onto
+        the raw frame. The split line is the gutter fraction applied between
+        the box's left and right edges, so both overlays show exactly what p5
+        will crop and p6 will cut, tilt included.
+
+        Must use the full-resolution frame: the page mask, tilt, and bounds are
+        resolution-dependent (a downscale can even flip ``crop_double_page``
+        into its whole-frame fallback when the spread doesn't fill the frame).
+        Returns ``{"box": 4 fractional corners, "box_src": "manual" /
+        "inherited" / "auto", "line": 2 fractional endpoints}``. Cached per
+        frame; invalidated when an override changes."""
+        if idx in self._geom_cache:
+            return self._geom_cache[idx]
         kf = self.keyframes[idx]
-        line = None
+        geom = None
         try:
             img = cv2.imread(str(self.paths.images / kf["filename"]))
             h, w = img.shape[:2]
-            rot = resolve_rotation(self.keyframes, idx)
-            if rot is None:
-                rot = _spread_tilt(page_mask(img))
-            cropped, _, (x0, cw_) = crop_double_page(img, self._resolve_margin(idx), rot)
+            quad = resolve_crop_quad(self.keyframes, idx)
             frac = kf.get("gutter")
+            if quad is not None:
+                box = [(float(x), float(y)) for x, y in quad]
+                box_src = "manual" if kf.get("crop_quad") else "inherited"
+                if frac is None:
+                    quad_px = np.array(
+                        [[x * w, y * h] for x, y in box], dtype=np.float32
+                    )
+                    cropped = crop_to_quad(img, quad_px, 0.0)
+            else:
+                rot = resolve_rotation(self.keyframes, idx)
+                if rot is None:
+                    rot = _spread_tilt(page_mask(img))
+                quad_px, cropped = self._auto_spread_quad(
+                    img, self._resolve_margin(idx), rot
+                )
+                box = [(x / w, y / h) for x, y in quad_px]
+                box_src = "auto"
             if frac is None:
-                # No own override: track the spine near the inherited prior (the
-                # nearest earlier correction), else fall back to full auto.
+                # No own override: track the spine near the inherited prior
+                # (the nearest earlier correction), else fall back to full auto.
                 prior = resolve_gutter(self.keyframes, idx)
                 frac = detect_gutter(cropped, prior=prior) / max(1, cropped.shape[1])
-            gx = x0 + frac * cw_
-            M = cv2.getRotationMatrix2D((w / 2, h / 2), rot, 1.0)
-            Minv = cv2.invertAffineTransform(M)
-            pts = np.array([[gx, 0, 1], [gx, h, 1]], dtype=np.float64) @ Minv.T
-            line = (
-                (pts[0, 0] / w, pts[0, 1] / h),
-                (pts[1, 0] / w, pts[1, 1] / h),
-            )
+            tl, tr, br, bl = box
+            geom = {
+                "box": box,
+                "box_src": box_src,
+                "line": (
+                    (tl[0] + frac * (tr[0] - tl[0]), tl[1] + frac * (tr[1] - tl[1])),
+                    (bl[0] + frac * (br[0] - bl[0]), bl[1] + frac * (br[1] - bl[1])),
+                ),
+            }
         except Exception:
-            line = None
-        self._gutter_cache[idx] = line
-        return line
-
-    def _build_split_preview(self, idx):
-        """Crop + deskew the frame exactly as p5 will, caching the result.
-
-        Re-uses p5's ``crop_double_page`` with the editor's live crop margin so
-        the gutter measured here (as a fraction of the cropped width) lands where
-        p6 actually splits. Cached by (idx, rotation, margin) so nudging just the
-        gutter doesn't re-crop."""
-        rot = self._split_rot
-        key = (idx, None if rot is None else round(rot, 3), round(self._split_margin, 4))
-        if key == self._split_cache_key and self._split_crop is not None:
-            return
-        kf = self.keyframes[idx]
-        img = cv2.imread(str(self.paths.images / kf["filename"]))
-        if img is None:
-            self._split_crop, self._split_auto_gutter = None, 0.5
-            self._split_resolved_rot = rot or 0.0
-            self._split_x0, self._split_cw = 0, 1
-            self._split_cache_key = key
-            return
-        if rot is None:
-            rot = _spread_tilt(page_mask(img))
-        cropped, _, (x0, cw) = crop_double_page(img, self._split_margin, rot)
-        gw = max(1, cropped.shape[1])
-        self._split_resolved_rot = rot
-        self._split_x0, self._split_cw = x0, cw
-        self._split_crop = cropped
-        # The auto/ghost gutter tracks the prior inherited from earlier spreads
-        # (idx-1, so this frame's own override doesn't seed itself), falling back
-        # to full center detection when there's no earlier correction yet.
-        prior = resolve_gutter(self.keyframes, idx - 1) if idx > 0 else None
-        self._split_auto_gutter = detect_gutter(cropped, prior=prior) / gw
-        self._split_cache_key = key
+            geom = None
+        self._geom_cache[idx] = geom
+        return geom
 
     def _enter_split(self):
         # Spreads only. _enter_geometry already routes single mode to the crop
@@ -862,39 +893,64 @@ class ReviewApp:
         if kf.get("is_cover") or self.actions.get(idx) == "cover":
             messagebox.showinfo("Split", "Covers are not split into pages.")
             return
-        # Tuning a spread's split implies it's a page you're keeping, so adopting
-        # G as a Keep too saves the separate "1" press (and overrides a stale
-        # delete flag on a frame you've now decided to keep).
+        if not self._seed_split_editor(idx):
+            messagebox.showinfo("Split", "Could not read this frame.")
+            return
+        # Tuning a spread's geometry implies it's a page you're keeping, so
+        # adopting G as a Keep too saves the separate "1" press (and overrides
+        # a stale delete flag on a frame you've now decided to keep).
         self.actions[idx] = "keep"
         # Keep keyboard focus on the root so arrow keys reach the split handler.
         self.root.focus_set()
         self.split_mode = True
-        own = kf.get("rotation_deg")
-        # Baseline angle: this frame's own override, else one inherited from an
-        # earlier correction (it propagates forward), else auto.
-        self._split_rot = resolve_rotation(self.keyframes, idx)
-        self._split_rot_dirty = own is not None
-        self._split_rot_src = (
-            "manual"
-            if own is not None
-            else "inherited" if self._split_rot is not None else "auto"
-        )
-        # Gutter baseline source for the HUD: own override, else a prior tracked
-        # from an earlier correction, else pure auto.
-        own_g = kf.get("gutter")
-        prior_g = resolve_gutter(self.keyframes, idx - 1) if idx > 0 else None
-        self._split_gutter_src = (
-            "manual" if own_g is not None else "tracked" if prior_g is not None else "auto"
-        )
-        # Crop margin baseline: this frame's own one-off override, else default.
-        self._split_margin = self._resolve_margin(idx)
-        self._split_margin_src = "manual" if kf.get("crop_margin") is not None else "default"
-        self._split_cache_key = None
-        self._build_split_preview(idx)
-        # Concretize the baseline angle so [ / ] nudge from the auto value.
-        self._split_rot = self._split_resolved_rot
-        self._split_frac = kf.get("gutter", self._split_auto_gutter)
+        self._crop_base_key = None  # force a base-frame redraw
         self._show_current()
+
+    def _seed_split_editor(self, idx):
+        """Load the editor's box + gutter from the frame's resolved geometry.
+
+        The box seeds from this frame's own crop_quad, else one propagated
+        from an earlier correction, else the auto crop (page mask + margin)
+        mapped onto the raw frame — so the editor always opens showing exactly
+        what Phase 5 would do. The gutter seeds from the frame's own override,
+        else spine detection on that box's crop, tracking the nearest earlier
+        correction as a prior (idx-1, so this frame's own override doesn't
+        seed itself after a reset). Returns False if the frame can't be read."""
+        kf = self.keyframes[idx]
+        img = cv2.imread(str(self.paths.images / kf["filename"]))
+        if img is None:
+            return False
+        h, w = img.shape[:2]
+        self._crop_W, self._crop_H = w, h
+        quad = resolve_crop_quad(self.keyframes, idx)
+        if quad is not None:
+            self._set_rect_from_quad([[x * w, y * h] for x, y in quad])
+            self._split_box_src = "manual" if kf.get("crop_quad") else "inherited"
+            cropped = crop_to_quad(
+                img, np.array(self._quad_from_rect(), dtype=np.float32), 0.0
+            )
+        else:
+            rot = resolve_rotation(self.keyframes, idx)
+            if rot is None:
+                rot = _spread_tilt(page_mask(img))
+            quad_px, cropped = self._auto_spread_quad(
+                img, self._resolve_margin(idx), rot
+            )
+            self._set_rect_from_quad(quad_px)
+            self._split_box_src = "auto"
+        self._split_box_dirty = False
+        prior = resolve_gutter(self.keyframes, idx - 1) if idx > 0 else None
+        self._split_auto_gutter = detect_gutter(cropped, prior=prior) / max(
+            1, cropped.shape[1]
+        )
+        own_g = kf.get("gutter")
+        self._split_frac = own_g if own_g is not None else self._split_auto_gutter
+        self._split_gutter_src = (
+            "manual"
+            if own_g is not None
+            else "tracked" if prior is not None else "auto"
+        )
+        return True
 
     def _split_move(self, delta):
         if not self.split_mode:
@@ -908,33 +964,11 @@ class ReviewApp:
     def _split_rotate(self, delta):
         if not self.split_mode:
             return
-        self._split_rot = (self._split_rot or 0.0) + delta
-        self._split_rot_dirty = True
-        self._split_rot_src = "manual"
-        self._build_split_preview(self.current_idx)
-        self._show_current()
 
-    def _split_margin_adjust(self, delta):
-        """Widen (⇧↑) or tighten (⇧↓) the breathing room around the spread.
+        def tilt():
+            self._crop_angle += delta
 
-        Re-crops the preview at the new margin. Because the crop width changes,
-        the gutter is re-anchored so a manually-placed spine stays put instead of
-        sliding with the crop; an un-touched gutter re-seeds from auto detection
-        on the new crop."""
-        if not self.split_mode:
-            return
-        # Absolute spine x in the deskewed frame, from the crop about to change.
-        gx_abs = self._split_x0 + self._split_frac * self._split_cw
-        self._split_margin = max(-0.05, min(0.20, self._split_margin + delta))
-        self._split_margin_src = "manual"
-        self._build_split_preview(self.current_idx)
-        if self._split_gutter_src == "manual":
-            self._split_frac = max(
-                0.05, min(0.95, (gx_abs - self._split_x0) / max(1, self._split_cw))
-            )
-        else:
-            self._split_frac = self._split_auto_gutter
-        self._show_current()
+        self._apply_box_change(tilt)
 
     def _split_reset(self):
         if not self.split_mode:
@@ -944,23 +978,13 @@ class ReviewApp:
         kf.pop("gutter_raw", None)
         kf.pop("rotation_deg", None)
         kf.pop("crop_margin", None)
-        # Removing a rotation changes what later frames inherit, so drop all
-        # cached split lines, not just this frame's.
-        self._gutter_cache.clear()
-        # An earlier correction may still propagate here after the reset.
-        self._split_rot = resolve_rotation(self.keyframes, self.current_idx)
-        self._split_rot_dirty = False
-        self._split_rot_src = "inherited" if self._split_rot is not None else "auto"
-        idx = self.current_idx
-        prior_g = resolve_gutter(self.keyframes, idx - 1) if idx > 0 else None
-        self._split_gutter_src = "tracked" if prior_g is not None else "auto"
-        # Crop margin doesn't propagate, so a reset always lands back on default.
-        self._split_margin = DEFAULT_SAFETY_MARGIN
-        self._split_margin_src = "default"
-        self._split_cache_key = None
-        self._build_split_preview(self.current_idx)
-        self._split_rot = self._split_resolved_rot
-        self._split_frac = self._split_auto_gutter
+        kf.pop("crop_quad", None)
+        # Removing overrides changes what later frames inherit, so drop all
+        # cached previews, not just this frame's.
+        self._geom_cache.clear()
+        # An earlier correction may still propagate here after the reset — the
+        # re-seed resolves the box/gutter chain afresh.
+        self._seed_split_editor(self.current_idx)
         self._show_current()
 
     def _split_confirm(self):
@@ -969,20 +993,21 @@ class ReviewApp:
         kf = self.keyframes[self.current_idx]
         kf["gutter"] = round(self._split_frac, 4)
         kf.pop("gutter_raw", None)  # legacy field from older sessions
-        if self._split_rot_dirty:
-            kf["rotation_deg"] = round(self._split_rot, 3)
-        # Store the crop margin only when it differs from the default; a value
-        # left at (or reset to) default carries no override so the field is
-        # dropped, keeping keyframes.json clean.
-        if abs(self._split_margin - DEFAULT_SAFETY_MARGIN) > 1e-6:
-            kf["crop_margin"] = round(self._split_margin, 4)
-        else:
+        if self._split_box_dirty:
+            # A touched box becomes this frame's own override: 4 fractional
+            # corners for p5's warp, plus the tilt as rotation_deg so later
+            # frames that still auto-crop deskew consistently. The box
+            # replaces the legacy crop-margin override outright.
+            kf["crop_quad"] = [
+                [round(x / self._crop_W, 5), round(y / self._crop_H, 5)]
+                for x, y in self._quad_from_rect()
+            ]
+            kf["rotation_deg"] = round(self._crop_angle, 3)
             kf.pop("crop_margin", None)
-        # Both the gutter and rotation now propagate forward as defaults, so a
-        # confirm changes every later frame's inherited split line — invalidate
-        # the whole cache, not just this frame's. (The margin is this frame's
-        # own, but a full clear is the safe superset.)
-        self._gutter_cache.clear()
+        # The gutter, rotation, and box all propagate forward as defaults, so a
+        # confirm changes every later frame's inherited geometry — invalidate
+        # the whole cache, not just this frame's.
+        self._geom_cache.clear()
         self.session_log.append(
             {
                 "time": datetime.now().isoformat(),
@@ -990,7 +1015,7 @@ class ReviewApp:
                 "frame": kf["frame_index"],
                 "gutter": kf["gutter"],
                 "rotation_deg": kf.get("rotation_deg"),
-                "crop_margin": kf.get("crop_margin"),
+                "crop_quad": kf.get("crop_quad"),
             }
         )
         self.split_mode = False
@@ -1001,55 +1026,46 @@ class ReviewApp:
         self._show_current()
 
     def _render_split(self, cw, ch):
-        """Draw the cropped preview, then the gutter overlay on top.
-
-        The resized base image is cached (keyed by the crop result and canvas
-        size), so only the cheap overlay redraws while the gutter is nudged."""
-        self._build_split_preview(self.current_idx)
-        self.canvas.delete("all")
-        cropped = self._split_crop
-        if cropped is None:
-            self.canvas.create_text(
-                cw // 2, ch // 2, text="(no preview)", fill="#ef4444"
-            )
-            return
-        ih, iw = cropped.shape[:2]
-        scale = min(cw / iw, ch / ih, 1.0)
-        dw, dh = max(1, int(iw * scale)), max(1, int(ih * scale))
-        pkey = (self._split_cache_key, dw, dh)
-        if pkey != self._split_photo_key or self._split_photo is None:
-            rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
-            pil = Image.fromarray(rgb).resize((dw, dh), Image.LANCZOS)
-            self._split_photo = ImageTk.PhotoImage(pil)
-            self._split_photo_key = pkey
-        self.photo = self._split_photo
-        self.canvas.create_image(
-            cw // 2, ch // 2, image=self._split_photo, anchor="center", tags="img"
-        )
-        self._split_geom = ((cw - dw) // 2, (ch - dh) // 2, dw, dh)
+        """Draw the raw frame, then the crop box + gutter overlay on top."""
+        self._render_frame_base(cw, ch)
         self._draw_split_overlay()
 
     def _draw_split_overlay(self):
-        """Redraw just the gutter line, auto-gutter ghost, and status text."""
+        """Redraw the crop box, its handles, both gutter lines, and the HUD."""
         self.canvas.delete("ov")
-        ix0, iy0, dw, dh = self._split_geom
-        ax = ix0 + int(dw * self._split_auto_gutter)
-        self.canvas.create_line(
-            ax, iy0, ax, iy0 + dh, fill="#22ff66", width=1, dash=(3, 5), tags="ov"
-        )
-        gx = ix0 + int(dw * self._split_frac)
-        self.canvas.create_line(
-            gx, iy0, gx, iy0 + dh, fill="#22ff66", width=2, tags="ov"
-        )
+        ix0, iy0, scale = self._crop_geom
+        quad = self._quad_from_rect()
+        pts = []
+        for x, y in quad:
+            pts += [ix0 + x * scale, iy0 + y * scale]
+        self.canvas.create_polygon(pts, outline="#22ff66", fill="", width=2, tags="ov")
+        for x, y in quad:
+            hx, hy = ix0 + x * scale, iy0 + y * scale
+            self.canvas.create_rectangle(
+                hx - 4, hy - 4, hx + 4, hy + 4,
+                outline="#22ff66", fill="#0a0a0a", tags="ov",
+            )
+        # Gutter (solid) and the detector's suggestion (dotted ghost), drawn
+        # between the box's top and bottom edges so the tilt shows faithfully.
+        for frac, width, dash in (
+            (self._split_auto_gutter, 1, (3, 5)),
+            (self._split_frac, 2, ()),
+        ):
+            (x1, y1), (x2, y2) = self._gutter_segment(frac)
+            self.canvas.create_line(
+                ix0 + x1 * scale, iy0 + y1 * scale,
+                ix0 + x2 * scale, iy0 + y2 * scale,
+                fill="#22ff66", width=width, dash=dash, tags="ov",
+            )
         self.canvas.create_text(
             self.canvas.winfo_width() // 2,
             iy0 + 14,
             text=(
-                f"SPLIT — ←/→ gutter  [ / ] rotate "
-                f"({self._split_resolved_rot:+.2f}° {self._split_rot_src})  "
-                f"⇧↑/↓ crop ({self._split_margin:+.1%} {self._split_margin_src})  "
+                f"SPLIT — drag box/corners/gutter  ←/→ gutter  ↑/↓ move  "
+                f"⇧arrows size  [ / ] tilt ({self._crop_angle:+.2f}°)  "
                 f"Enter save  Esc cancel  ⌫ reset   "
-                f"gutter={self._split_frac:.3f} {self._split_gutter_src}"
+                f"gutter={self._split_frac:.3f} {self._split_gutter_src}  "
+                f"box={self._split_box_src}"
             ),
             fill="#22ff66",
             font=("Menlo", 10),
@@ -1161,6 +1177,215 @@ class ReviewApp:
             (cx - hw * ux + hh * vx, cy - hw * uy + hh * vy),
         ]
 
+    # ── Box math shared by both editors ──
+    def _box_axes(self):
+        """Unit vectors along the box's top edge (u) and down its left edge (v)."""
+        a = np.radians(self._crop_angle)
+        return (np.cos(a), np.sin(a)), (-np.sin(a), np.cos(a))
+
+    def _gutter_segment(self, frac):
+        """The gutter line's raw-frame px endpoints at ``frac`` of box width."""
+        tl, tr, br, bl = self._quad_from_rect()
+        return (
+            (tl[0] + frac * (tr[0] - tl[0]), tl[1] + frac * (tr[1] - tl[1])),
+            (bl[0] + frac * (br[0] - bl[0]), bl[1] + frac * (br[1] - bl[1])),
+        )
+
+    def _frac_of_point(self, pt):
+        """Gutter fraction whose line passes through raw-frame point ``pt``."""
+        (ux, uy), _ = self._box_axes()
+        u = (pt[0] - self._crop_cx) * ux + (pt[1] - self._crop_cy) * uy
+        return max(0.05, min(0.95, u / max(1e-6, self._crop_w) + 0.5))
+
+    def _point_of_frac(self, frac):
+        """Raw-frame point on the gutter line at ``frac`` (box mid-height)."""
+        (ux, uy), _ = self._box_axes()
+        u = (frac - 0.5) * self._crop_w
+        return (self._crop_cx + u * ux, self._crop_cy + u * uy)
+
+    def _apply_box_change(self, mutate):
+        """Run a box mutation, keeping the editor's state coherent.
+
+        In the split editor both gutter lines are pinned to their raw-frame
+        spots across the change — the spine doesn't move because the crop did —
+        and the box becomes an operator override. In the single-mode editor the
+        box is simply marked manual. Ends with the cheap overlay redraw (the
+        raw base frame never changes during an edit)."""
+        if self.split_mode:
+            g_pt = self._point_of_frac(self._split_frac)
+            a_pt = self._point_of_frac(self._split_auto_gutter)
+            mutate()
+            self._split_frac = self._frac_of_point(g_pt)
+            self._split_auto_gutter = self._frac_of_point(a_pt)
+            self._split_box_dirty = True
+            self._split_box_src = "manual"
+            self._draw_split_overlay()
+        else:
+            mutate()
+            self._crop_src = "manual"
+            self._draw_crop_overlay()
+
+    def _box_resize_key(self, direction):
+        """⇧+arrow resize about the center: ←/→ width, ↑ taller, ↓ shorter."""
+        W, H = self._crop_W, self._crop_H
+        if direction == "left":
+            self._crop_w = max(0.05 * W, self._crop_w - 0.01 * W)
+        elif direction == "right":
+            self._crop_w = min(1.5 * W, self._crop_w + 0.01 * W)
+        elif direction == "up":
+            self._crop_h = min(1.5 * H, self._crop_h + 0.01 * H)
+        elif direction == "down":
+            self._crop_h = max(0.05 * H, self._crop_h - 0.01 * H)
+
+    def _box_pan_vertical(self, direction):
+        H = self._crop_H
+        self._crop_cy += -0.004 * H if direction == "up" else 0.004 * H
+        self._crop_cy = max(0.0, min(H, self._crop_cy))
+
+    def _drag_corner(self, k, fx, fy):
+        """Resize by dragging corner ``k``, keeping the opposite corner pinned."""
+        ox, oy = self._quad_from_rect()[(k + 2) % 4]
+        (ux, uy), (vx, vy) = self._box_axes()
+        du = (fx - ox) * ux + (fy - oy) * uy
+        dv = (fx - ox) * vx + (fy - oy) * vy
+        su = -1.0 if k in (0, 3) else 1.0  # the corner's side of the center
+        sv = -1.0 if k in (0, 1) else 1.0
+        w = max(0.05 * self._crop_W, su * du)
+        h = max(0.05 * self._crop_H, sv * dv)
+        self._crop_cx = ox + su * w / 2 * ux + sv * h / 2 * vx
+        self._crop_cy = oy + su * w / 2 * uy + sv * h / 2 * vy
+        self._crop_w, self._crop_h = w, h
+
+    def _drag_edge(self, k, fx, fy):
+        """Move edge ``k`` (0 top, 1 right, 2 bottom, 3 left) along its normal,
+        keeping the opposite edge pinned."""
+        (ux, uy), (vx, vy) = self._box_axes()
+        cx, cy = self._crop_cx, self._crop_cy
+        if k in (0, 2):
+            vp = (fx - cx) * vx + (fy - cy) * vy
+            hh = self._crop_h / 2
+            if k == 0:
+                nh = max(0.05 * self._crop_H, hh - vp)
+                cv_ = hh - nh / 2
+            else:
+                nh = max(0.05 * self._crop_H, hh + vp)
+                cv_ = -hh + nh / 2
+            self._crop_cx, self._crop_cy = cx + cv_ * vx, cy + cv_ * vy
+            self._crop_h = nh
+        else:
+            up = (fx - cx) * ux + (fy - cy) * uy
+            hw = self._crop_w / 2
+            if k == 3:
+                nw = max(0.05 * self._crop_W, hw - up)
+                cu = hw - nw / 2
+            else:
+                nw = max(0.05 * self._crop_W, hw + up)
+                cu = -hw + nw / 2
+            self._crop_cx, self._crop_cy = cx + cu * ux, cy + cu * uy
+            self._crop_w = nw
+
+    # ── Mouse editing (both geometry editors) ──
+    @staticmethod
+    def _seg_dist(p, a, b):
+        """Distance from point ``p`` to segment ``a``–``b``."""
+        px, py = p
+        ax, ay = a
+        bx, by = b
+        dx, dy = bx - ax, by - ay
+        l2 = dx * dx + dy * dy
+        t = 0.0 if l2 == 0 else max(
+            0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / l2)
+        )
+        qx, qy = ax + t * dx, ay + t * dy
+        return ((px - qx) ** 2 + (py - qy) ** 2) ** 0.5
+
+    def _hit_test(self, cx, cy):
+        """What the pointer is over, in canvas px, or None.
+
+        Priority: corner handles, then the gutter line (split editor only),
+        then box edges, then the box interior — small targets win over the
+        large ones they sit on."""
+        ix0, iy0, scale = self._crop_geom
+        pts = [
+            (ix0 + x * scale, iy0 + y * scale) for x, y in self._quad_from_rect()
+        ]
+        for k, (hx, hy) in enumerate(pts):
+            if abs(cx - hx) <= 10 and abs(cy - hy) <= 10:
+                return {"kind": "corner", "corner": k}
+        if self.split_mode:
+            (x1, y1), (x2, y2) = self._gutter_segment(self._split_frac)
+            a = (ix0 + x1 * scale, iy0 + y1 * scale)
+            b = (ix0 + x2 * scale, iy0 + y2 * scale)
+            if self._seg_dist((cx, cy), a, b) <= 8:
+                return {"kind": "gutter"}
+        for k in range(4):
+            if self._seg_dist((cx, cy), pts[k], pts[(k + 1) % 4]) <= 8:
+                return {"kind": "edge", "edge": k}
+        fx, fy = (cx - ix0) / scale, (cy - iy0) / scale
+        (ux, uy), (vx, vy) = self._box_axes()
+        du = (fx - self._crop_cx) * ux + (fy - self._crop_cy) * uy
+        dv = (fx - self._crop_cx) * vx + (fy - self._crop_cy) * vy
+        if abs(du) <= self._crop_w / 2 and abs(dv) <= self._crop_h / 2:
+            return {"kind": "move", "last": (fx, fy)}
+        return None
+
+    def _on_mouse_down(self, e):
+        if not self._editing():
+            return
+        self._drag = self._hit_test(e.x, e.y)
+
+    def _on_mouse_drag(self, e):
+        if not self._editing() or not self._drag:
+            return
+        ix0, iy0, scale = self._crop_geom
+        fx, fy = (e.x - ix0) / scale, (e.y - iy0) / scale
+        kind = self._drag["kind"]
+        if kind == "gutter":
+            self._split_frac = self._frac_of_point((fx, fy))
+            self._split_gutter_src = "manual"
+            self._draw_split_overlay()
+        elif kind == "move":
+            lx, ly = self._drag["last"]
+            self._drag["last"] = (fx, fy)
+
+            def pan():
+                self._crop_cx = max(
+                    0.0, min(self._crop_W, self._crop_cx + fx - lx)
+                )
+                self._crop_cy = max(
+                    0.0, min(self._crop_H, self._crop_cy + fy - ly)
+                )
+
+            self._apply_box_change(pan)
+        elif kind == "corner":
+            self._apply_box_change(
+                lambda: self._drag_corner(self._drag["corner"], fx, fy)
+            )
+        elif kind == "edge":
+            self._apply_box_change(
+                lambda: self._drag_edge(self._drag["edge"], fx, fy)
+            )
+
+    def _on_mouse_up(self, _e):
+        self._drag = None
+
+    def _on_mouse_hover(self, e):
+        """Cursor feedback so the drag targets are discoverable."""
+        if not self._editing() or self._drag:
+            return
+        hit = self._hit_test(e.x, e.y)
+        if not hit:
+            cur = ""
+        elif hit["kind"] == "corner":
+            cur = "crosshair"
+        elif hit["kind"] == "gutter":
+            cur = "sb_h_double_arrow"
+        elif hit["kind"] == "edge":
+            cur = "sb_v_double_arrow" if hit["edge"] in (0, 2) else "sb_h_double_arrow"
+        else:
+            cur = "fleur"
+        self.canvas.configure(cursor=cur)
+
     def _crop_arrow(self, direction, shift):
         W, H = self._crop_W, self._crop_H
         if shift:
@@ -1229,11 +1454,11 @@ class ReviewApp:
         self.crop_mode = False
         self._show_current()
 
-    def _render_crop(self, cw, ch):
-        """Draw the raw frame, then the adjustable crop box on top.
+    def _render_frame_base(self, cw, ch):
+        """Draw the raw frame scaled to the canvas, cached by frame + size.
 
-        The resized base frame is cached (keyed by frame + canvas size) so only
-        the cheap box overlay redraws while it's moved/resized/rotated."""
+        Both geometry editors draw on the raw frame so the operator sees the
+        context around the box; only the cheap overlay redraws during edits."""
         kf = self.keyframes[self.current_idx]
         key = (self.current_idx, cw, ch)
         if key != self._crop_base_key or self._crop_base_photo is None:
@@ -1251,6 +1476,10 @@ class ReviewApp:
         self.canvas.create_image(
             cw // 2, ch // 2, image=self._crop_base_photo, anchor="center"
         )
+
+    def _render_crop(self, cw, ch):
+        """Draw the raw frame, then the adjustable crop box on top."""
+        self._render_frame_base(cw, ch)
         self._draw_crop_overlay()
 
     def _draw_crop_overlay(self):
@@ -1274,9 +1503,9 @@ class ReviewApp:
             self.canvas.winfo_width() // 2,
             iy0 + 14,
             text=(
-                f"CROP — arrows move  ⇧+arrows size  [ / ] tilt "
-                f"({self._crop_angle:+.1f}°)  Enter save  Esc cancel  ⌫ auto   "
-                f"src={self._crop_src}"
+                f"CROP — drag box/corners/edges  arrows move  ⇧+arrows size  "
+                f"[ / ] tilt ({self._crop_angle:+.1f}°)  Enter save  "
+                f"Esc cancel  ⌫ auto   src={self._crop_src}"
             ),
             fill="#22ff66",
             font=("Menlo", 10),
@@ -1364,7 +1593,7 @@ class ReviewApp:
         self.pending_deletes = []
         self.pending_inserts = []
         self.actions = {}
-        self._gutter_cache.clear()  # indices shifted after deletions
+        self._geom_cache.clear()  # indices shifted after deletions
         self._crop_preview_cache.clear()
 
         # Re-flag covers/doc_starts from data

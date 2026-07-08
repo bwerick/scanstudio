@@ -242,6 +242,24 @@ def resolve_rotation(keyframes, idx):
     return None
 
 
+def resolve_crop_quad(keyframes, idx):
+    """Manual crop box in effect for keyframe ``idx`` (double mode), or None.
+
+    The box — 4 corners (tl, tr, br, bl) as fractions of the raw frame, drawn
+    in Phase-4 review — propagates forward like ``resolve_rotation``: the rig
+    and the book barely move between page turns, so one corrected box holds
+    for every following spread until the next correction. Returns the
+    keyframe's own box, else the nearest earlier one, else None (auto crop).
+    Single mode reads ``crop_quad`` directly without propagation: loose pages
+    move and resize between frames, so one page's box says nothing about the
+    next."""
+    for kf in reversed(keyframes[: idx + 1]):
+        q = kf.get("crop_quad")
+        if q is not None:
+            return q
+    return None
+
+
 def text_skew(page, max_deg: float = 3.0) -> float:
     """Residual skew (deg) of the text lines in a single page image.
 

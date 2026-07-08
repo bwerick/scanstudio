@@ -197,13 +197,13 @@ Tkinter GUI for reviewing and correcting the keyframe selection. This phase is r
 | `6` | Mark as Doc Start |
 | `I` | Insert frame (opens video scrubber) |
 | `C` | Toggle center line |
-| `G` | Adjust geometry — **double:** split/gutter line (`←`/`→` gutter, `[` `]` rotate); **single:** crop box (arrows move, `⇧`+arrows resize, `[` `]` tilt). `Enter` save, `Esc` cancel, `Backspace` reset |
+| `G` | Adjust geometry: a draggable crop box over the raw frame — drag inside to move, drag a corner/edge to resize, `[` `]` tilt, `⇧`+arrows resize. **double** adds the gutter line (drag it, or `←`/`→`; `↑`/`↓` move the box). `Enter` save, `Esc` cancel, `Backspace` reset |
 | `⌘S` | Save |
 
 `G` adapts to `MODE=` (the `review` target passes it through automatically):
 
-- **double** — previews the spread split + deskew and lets you correct the gutter and rotation per spread; corrections propagate forward to later spreads.
-- **single** — the gutter overlay is hidden (each frame is already one page). `G` opens a **crop editor**: an adjustable rotated rectangle over the raw frame. Use it when the GrabCut auto-crop (P5) clips real text or wanders as page sizes vary (e.g. receipts). Confirming stores the box as 4 corners on the keyframe, and P5 warps exactly that box instead of auto-detecting. A confirmed crop is drawn as a green box during review.
+- **double** — a crop box around the spread plus the gutter (split) line inside it. Corrections propagate forward to later spreads until the next correction: the box and its tilt as fixed values (the rig doesn't move between page turns), the gutter as a tracking prior. Frames you never touch keep the automatic page-mask crop. Confirming a touched box stores it as 4 corners (`crop_quad`), and P5 warps exactly that box.
+- **single** — the gutter overlay is hidden (each frame is already one page). The same crop box editor covers cases where the GrabCut auto-crop (P5) clips real text or wanders as page sizes vary (e.g. receipts). Confirming stores the box as 4 corners on the keyframe, and P5 warps exactly that box instead of auto-detecting; unlike double mode the box does **not** propagate. A confirmed crop is drawn as a green box during review.
 
 ### P5 — Crop
 
@@ -213,8 +213,8 @@ make crop VIDEO=recordings/mybook.mp4
 
 Crops the book/page out of the surrounding frame. Modifies `images/` in-place. Re-run P3 to restore originals.
 
-- `double` mode: applies crop bounds from P4 + Otsu background detection
-- `single` mode: warps a P4 manual crop box (`crop_quad`) if present; otherwise uses GrabCut to segment the page from the table surface (handles rotation, works with any page color)
+- `double` mode: warps the P4 manual crop box (`crop_quad`) in effect — this frame's own or one propagated from an earlier correction; otherwise applies crop bounds from P4 + page-mask background detection
+- `single` mode: warps a P4 manual crop box (`crop_quad`) if present (no propagation); otherwise uses GrabCut to segment the page from the table surface (handles rotation, works with any page color)
 
 ### P6 — Split Pages
 
@@ -305,7 +305,7 @@ make bw VIDEO=recordings/african_founders.mp4
 
 **No peaks detected** — The video may have low-contrast page turns. Check `plots/motion_plot.png` to inspect the signal. Adjust peak detection parameters in `scripts/p2_detect_peaks.py`.
 
-**Crop removes too much / too little** — Adjust `SAFETY_MARGIN`. For an off-center spine, fix the split with the `G` gutter line in P4 review.
+**Crop removes too much / too little** — Press `G` in P4 review and drag the crop box where it belongs; it propagates to later spreads until your next correction. (`SAFETY_MARGIN` only pads the automatic crop on untouched frames.) For an off-center spine, drag the `G` gutter line.
 
 **Binarization looks wrong** — Try `BW_METHOD=adaptive`, or tune `BW_K` (Sauvola stroke weight; higher = thinner), `BLOCK_SIZE` (larger = coarser regions), and `BW_OFFSET` (adaptive only).
 
