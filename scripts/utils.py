@@ -14,6 +14,7 @@ Directory structure per video:
   └── pdf/       # final PDFs
 """
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -242,6 +243,21 @@ def resolve_rotation(keyframes, idx):
     return None
 
 
+def resolve_crop_anchor(keyframes, idx):
+    """Manual crop box in effect for keyframe ``idx`` and where it came from.
+
+    Returns ``(quad, anchor_idx)`` — the nearest crop_quad at or before
+    ``idx`` and the index of the keyframe that owns it — or ``(None, None)``.
+    The anchor index matters to the boundary watchdog: its baseline is
+    measured on the anchor frame's own image, so later frames are compared
+    against how the boundary sat when the operator drew the box."""
+    for j in range(idx, -1, -1):
+        q = keyframes[j].get("crop_quad")
+        if q is not None:
+            return q, j
+    return None, None
+
+
 def resolve_crop_quad(keyframes, idx):
     """Manual crop box in effect for keyframe ``idx`` (double mode), or None.
 
@@ -253,11 +269,247 @@ def resolve_crop_quad(keyframes, idx):
     Single mode reads ``crop_quad`` directly without propagation: loose pages
     move and resize between frames, so one page's box says nothing about the
     next."""
-    for kf in reversed(keyframes[: idx + 1]):
-        q = kf.get("crop_quad")
-        if q is not None:
-            return q
-    return None
+    return resolve_crop_anchor(keyframes, idx)[0]
+
+
+# ── Consensus box + boundary watchdog (double mode) ──────────
+#
+# The capture rig is static: across a real session the spread sits in nearly
+# the same spot in every frame (measured operator corrections vary by under
+# 1% of the frame width, and the page boundary itself never shifted beyond
+# measurement noise). Cropping therefore shouldn't re-guess every frame.
+# Instead one *consensus* box is voted from a sample of frames — robust to
+# the hands, glare, or mid-turn pages that break any single frame — and an
+# operator correction propagates forward verbatim.
+#
+# The per-edge boundary measurement exists as a *watchdog*, not an
+# auto-corrector: validation against a 60-correction session showed that
+# following the measured boundary makes boxes worse (the fanned page stack
+# under the spread moves the paper outline even while the book holds still),
+# but a *persistent* boundary shift beyond ~2% of the frame width reliably
+# means something real happened (a bumped book, a new resting position).
+# Phase 4's review queue measures every frame in the background and flags
+# those, so the operator checks a handful of frames instead of all of them.
+
+# Mask/measure at this width: page_mask's 25 px morphology is tuned for
+# roughly this scale, and it keeps a 4K frame cheap (~60 ms).
+TRACK_WORK_WIDTH = 1600
+# Measurement band around a box edge, as a fraction of frame width. A
+# boundary beyond this simply isn't measured (reported unreliable).
+TRACK_BAND_FRAC = 0.04
+# Watchdog alert threshold. Between adjacent keyframes of a static book the
+# per-edge measurement wobbles with p90 ≈ 1.2% of the frame width (page
+# curl, the fanned stack, a hand); a median-smoothed shift beyond ~2% is a
+# real event worth an operator's glance.
+WATCHDOG_ALERT_FRAC = 0.02
+CONSENSUS_SAMPLES = 15
+
+
+def _order_quad(pts):
+    """Order 4 points as (tl, tr, br, bl). Same rule as p5's order_points."""
+    pts = np.asarray(pts, dtype=float)
+    s = pts.sum(axis=1)
+    d = np.diff(pts, axis=1).ravel()
+    return np.array([pts[np.argmin(s)], pts[np.argmin(d)],
+                     pts[np.argmax(s)], pts[np.argmax(d)]])
+
+
+def _quad_axes(quad):
+    """Unit vectors along the quad's top edge (u) and down its left edge (v)."""
+    tl, tr, br, bl = [np.asarray(p, dtype=float) for p in quad]
+    u = (tr - tl) + (br - bl)
+    v = (bl - tl) + (br - tr)
+    return u / max(1e-9, np.linalg.norm(u)), v / max(1e-9, np.linalg.norm(v))
+
+
+def edge_boundary_offsets(mask, quad, band, n_samples=25, step=2):
+    """Where the page boundary sits relative to each edge of ``quad``.
+
+    Casts rays along the outward normal from points spread over each edge's
+    middle 80%; each ray reports the offset at which the page mask ends
+    (negative = boundary inside the box, positive = outside). The per-edge
+    result is the median over its rays, so a hand or a glare patch crossing
+    part of an edge is outvoted. An edge is *unreliable* when most rays never
+    cross the boundary within ±``band`` px — mask everywhere (a page stack
+    running past the box and out of frame) or nowhere — or when the median
+    sits at the band limit.
+
+    Returns ``(offsets, reliable)``, each length 4, indexed top, right,
+    bottom, left. All units are mask pixels.
+    """
+    m = mask > 0
+    h, w = m.shape[:2]
+    tl, tr, br, bl = [np.asarray(p, dtype=float) for p in quad]
+    u, v = _quad_axes(quad)
+    edges = ((tl, tr, -v), (tr, br, u), (bl, br, v), (tl, bl, -u))
+    ts = np.arange(-band, band + 1e-9, step)
+    offsets, reliable = [], []
+    for a, b, n in edges:
+        span = np.linspace(0.1, 0.9, n_samples)[:, None]
+        base = a[None, :] + span * (b - a)[None, :]
+        pts = base[:, None, :] + ts[None, :, None] * n[None, None, :]
+        xi = np.rint(pts[..., 0]).astype(int)
+        yi = np.rint(pts[..., 1]).astype(int)
+        ok = (xi >= 0) & (xi < w) & (yi >= 0) & (yi < h)
+        inside = np.zeros(ok.shape, dtype=bool)
+        inside[ok] = m[yi[ok], xi[ok]]
+        # The mask is a solid blob, so along a ray "inside length" locates the
+        # step edge: boundary = -band + (pixels inside) — no explicit crossing
+        # search, and small speckle just nudges the estimate.
+        counts = inside.sum(axis=1)
+        mixed = (counts > 0) & (counts < len(ts))
+        if mixed.sum() >= n_samples * 0.5:
+            off = float(np.median(-band + counts[mixed] * step))
+            rel = abs(off) <= band * 0.95
+        else:
+            off, rel = 0.0, False
+        offsets.append(off)
+        reliable.append(bool(rel))
+    return offsets, reliable
+
+
+def measure_quad_offsets(img, quad_px, band_px=None):
+    """Per-edge page-boundary offsets for a full-res frame, in full-res px.
+
+    Downscales, runs ``page_mask``, and measures ``edge_boundary_offsets``
+    around ``quad_px``. Anchor frames and tracked frames must both be measured
+    through this same path so any systematic bias of the mask cancels in the
+    difference the tracker uses. Returns ``(offsets, reliable)``.
+    """
+    h, w = img.shape[:2]
+    if band_px is None:
+        band_px = TRACK_BAND_FRAC * w
+    s = min(1.0, TRACK_WORK_WIDTH / w)
+    small = (
+        cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+        if s < 1.0
+        else img
+    )
+    mask = page_mask(small)
+    off, rel = edge_boundary_offsets(
+        mask, np.asarray(quad_px, dtype=float) * s, band=band_px * s
+    )
+    return [o / s for o in off], rel
+
+
+def boundary_shift(anchor_off, anchor_rel, off_window, rel_window):
+    """Watchdog score: how far the page boundary has moved since the anchor.
+
+    ``off_window``/``rel_window`` are per-edge measurements from a few
+    consecutive keyframes (the current one and its neighbours); each edge's
+    delta against the anchor baseline is median-smoothed across the window,
+    so a one-frame artifact — a hand, a lifted page fan — cannot alert, while
+    a shift that *persists* does. Validation on a real session: single-frame
+    deltas false-alarm as often as they detect, median-of-3 deltas beyond 2%
+    of the frame width are real events.
+
+    Returns ``(score, measured)``: the largest smoothed |delta| over the
+    edges measurable in both the anchor and the window (px), and whether any
+    edge was measurable at all (an immeasurable frame deserves a glance too).
+    """
+    score, measured = 0.0, False
+    for k in range(4):
+        if not anchor_rel[k]:
+            continue
+        vals = [o[k] for o, r in zip(off_window, rel_window) if r[k]]
+        if len(vals) < (len(off_window) + 1) // 2:
+            continue
+        measured = True
+        score = max(score, abs(float(np.median(vals)) - anchor_off[k]))
+    return score, measured
+
+
+def consensus_geometry(images_dir, keyframes, cache_path=None,
+                       samples=CONSENSUS_SAMPLES, log_fn=None):
+    """One crop box for the whole session, voted from a sample of frames.
+
+    Computes the page mask on ``samples`` keyframes spread across the session,
+    keeps the pixels that are page in at least half of them (a hand, glare, or
+    a mid-turn page in any one frame is outvoted), and takes the largest
+    blob's minimum-area rectangle — a snug rotated box with the session's
+    angle built in. Also measures the box's per-edge baseline boundary
+    offsets on the voted mask, which is what ``track_quad`` needs to use the
+    consensus as a tracking anchor on frames with no manual correction yet.
+
+    Returns ``{"quad": 4 fractional corners, "edge_ref": [4 offsets in
+    full-res px], "edge_rel": [4 bools], "size": [W, H]}`` or None when there
+    aren't enough readable same-sized frames or no page-sized region exists.
+    Cached to ``cache_path`` keyed by the sampled files' identity, so the
+    ~2 s vote runs once per project, not once per run."""
+    cands = [kf["filename"] for kf in keyframes if not kf.get("is_cover")]
+    if len(cands) < 3:
+        return None
+    picks = sorted(set(np.linspace(0, len(cands) - 1,
+                                   min(samples, len(cands))).astype(int)))
+    files, fp = [], []
+    for i in picks:
+        p = Path(images_dir) / cands[i]
+        if p.exists():
+            st = p.stat()
+            files.append(p)
+            fp.append([cands[i], st.st_size, st.st_mtime_ns])
+    if len(files) < 3:
+        return None
+
+    if cache_path is not None and Path(cache_path).exists():
+        try:
+            data = json.loads(Path(cache_path).read_text())
+            if data.get("fingerprint") == fp:
+                return data
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    if log_fn:
+        log_fn(f"Voting consensus crop box from {len(files)} frames…")
+    masks, size, scale = [], None, 1.0
+    for p in files:
+        img = cv2.imread(str(p))
+        if img is None:
+            continue
+        h, w = img.shape[:2]
+        if size is None:
+            size = (w, h)
+            scale = min(1.0, TRACK_WORK_WIDTH / w)
+        elif (w, h) != size:
+            # Mixed sizes mean images/ was already cropped in place (Phase 5
+            # ran) — a vote over those is meaningless.
+            continue
+        small = (
+            cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            if scale < 1.0
+            else img
+        )
+        masks.append(page_mask(small) > 0)
+    if len(masks) < 3:
+        return None
+
+    maj = (np.mean(masks, axis=0) >= 0.5).astype(np.uint8) * 255
+    cnts, _ = cv2.findContours(maj, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return None
+    big = max(cnts, key=cv2.contourArea)
+    mh, mw = maj.shape[:2]
+    if cv2.contourArea(big) < 0.05 * mw * mh:
+        return None
+    solid = np.zeros_like(maj)
+    cv2.drawContours(solid, [big], -1, 255, -1)
+    quad = _order_quad(cv2.boxPoints(cv2.minAreaRect(big)))
+    off, rel = edge_boundary_offsets(
+        solid, quad, band=TRACK_BAND_FRAC * size[0] * scale
+    )
+
+    W, H = size
+    data = {
+        "fingerprint": fp,
+        "size": [W, H],
+        "quad": [[round(float(x) / scale / W, 5), round(float(y) / scale / H, 5)]
+                 for x, y in quad],
+        "edge_ref": [round(o / scale, 2) for o in off],
+        "edge_rel": rel,
+    }
+    if cache_path is not None:
+        Path(cache_path).write_text(json.dumps(data))
+    return data
 
 
 def text_skew(page, max_deg: float = 3.0) -> float:

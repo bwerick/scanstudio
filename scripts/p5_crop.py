@@ -5,7 +5,9 @@ Phase 5: Crop Keyframes
 Two modes:
   double (default): For book spreads — a manual crop box from Phase-4 review
            (crop_quad, propagated forward from the nearest earlier correction)
-           wins; otherwise crop bounds + page-mask auto detection.
+           wins; otherwise the session's consensus box (voted once from a
+           sample of frames — the rig is static, so one box fits the whole
+           session); per-frame page-mask detection only as a last resort.
   single: For loose documents — a per-frame manual crop_quad wins; otherwise
            GrabCut segments the page from the table. Handles rotation, works
            with any page color.
@@ -31,6 +33,7 @@ from utils import (
     log,
     ProjectPaths,
     check_overwrite,
+    consensus_geometry,
     page_mask,
     resolve_rotation,
     resolve_crop_quad,
@@ -345,6 +348,7 @@ def main():
 
     # Load crop bounds from review (for double mode side trim)
     global_crop = None
+    consensus = None
     if args.mode == "double":
         rl_path = paths.json / "review_log.json"
         if rl_path.exists():
@@ -357,6 +361,15 @@ def main():
             log(
                 f"  Crop bounds: L={global_crop['left']:.1%}, R={global_crop['right']:.1%}"
             )
+        # The default box for frames with no manual correction in effect. One
+        # box fits the session (the rig is static), and voting it across
+        # frames is far steadier than re-detecting per frame.
+        consensus = consensus_geometry(
+            paths.images, keyframes,
+            cache_path=paths.json / "consensus_geometry.json", log_fn=log,
+        )
+        if consensus:
+            log(f"  Consensus box: {consensus['quad']}")
 
     log("")
     t0 = time.time()
@@ -390,18 +403,24 @@ def main():
 
         else:
             # Double-page. A manual crop box from Phase-4 review wins outright:
-            # it propagates forward from the nearest earlier correction (the
-            # rig doesn't move between page turns), is drawn on the raw frame,
-            # and encodes position, size, and tilt at once — so it replaces the
-            # side-bounds + auto-detection path entirely for this frame.
+            # it propagates forward verbatim from the nearest earlier
+            # correction (measured on real sessions: the book never moves
+            # beyond noise between corrections), is drawn on the raw frame,
+            # and encodes position, size, and tilt at once. With no correction
+            # in effect the session's consensus box applies — same box on
+            # every frame, so the output is steady instead of flickering with
+            # each frame's detection quirks.
             quad = None if is_cover else resolve_crop_quad(keyframes, i)
+            method = "manual_quad" if kf.get("crop_quad") else "inherited_quad"
+            if quad is None and not is_cover and consensus:
+                quad = consensus["quad"]
+                method = "consensus_quad"
             if quad is not None:
                 h_img, w_img = img.shape[:2]
                 quad_px = np.array(
                     [[p[0] * w_img, p[1] * h_img] for p in quad], dtype=np.float32
                 )
                 cropped = crop_to_quad(img, quad_px, 0.0)
-                method = "manual_quad" if kf.get("crop_quad") else "inherited_quad"
             else:
                 # Auto path: crop bounds + page-mask detection
                 # Step 1: Apply side crop bounds

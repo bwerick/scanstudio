@@ -14,23 +14,28 @@ Keys:
   4    Delete: Other    5    Cover    6    Doc Start
   I    Insert frame (video scrubber)
   C    Toggle center guide
+  E    Jump to the next frame the watchdog flagged (double mode)
   G    Adjust geometry — double: crop box + gutter; single: crop box
-       Mouse: drag inside the box to move it, drag a corner or edge to resize,
-       drag the gutter line to move the split. Keys: [ / ] tilt, ⇧+arrows
-       resize; double adds ←/→ gutter + ↑/↓ move, single arrows move.
-       Enter save, Esc cancel, ⌫ reset. Marks Keep.
+       Mouse (double): drag anywhere inside the box to place the gutter,
+       ⇧+drag inside to move the box, drag a corner or edge to resize.
+       Mouse (single): drag inside to move the box, corners/edges to resize.
+       Keys: [ / ] tilt, ⇧+arrows resize; double adds ←/→ gutter + ↑/↓ move,
+       single arrows move. Enter save, Esc cancel, ⌫ reset. Marks Keep.
   ⌘S   Save
 
-Cropping and deskew are automatic (Phase 5) until corrected. In double mode, G
-opens a geometry editor on the raw frame: a rotated crop box around the spread
-with the gutter (split) line inside it. Corrections propagate forward to later
-spreads until the next correction: the box and its tilt as fixed values (the
-rig doesn't move between page turns), the gutter as a tracking prior — later
-spreads re-detect the spine in a tight band around your last hint, so it
-follows the book as it shifts and a correction stays the exception, not the
-rule. Until the box is touched, Phase 5 keeps auto-detecting the spread (page
-mask + safety margin); once a box is confirmed it is stored as 4 fractional
-corners (``crop_quad``) and Phase 5 warps exactly that box.
+In double mode every frame starts from the session's *consensus* crop box —
+voted once from a sample of frames (the rig is static, so one box fits the
+whole session) — and a confirmed manual box propagates forward verbatim until
+the next correction. Measured on real sessions, the book never moves beyond
+noise between corrections, so the box that needs zero per-frame fiddling is
+the last one you drew. The gutter still propagates as a tracking prior: later
+spreads re-detect the spine in a tight band around your last hint.
+
+A background *watchdog* re-measures where the page boundary sits on every
+frame; when it shifts persistently (a bumped book, a new resting position) or
+can't be measured at all, the frame is flagged — the top bar counts alerts
+and E jumps through them, so reviewing means checking a short list rather
+than eyeballing every spread.
 
 Single mode (--mode single) reviews loose one-page-per-frame documents: each
 keyframe is one page, so the gutter overlay is hidden. G opens the same crop
@@ -41,7 +46,7 @@ auto-detecting. Unlike double mode the box does NOT propagate — loose pages
 move and resize between frames.
 """
 
-import argparse, json, sys, time, shutil, os
+import argparse, copy, json, queue, sys, threading, time, shutil, os
 from pathlib import Path
 from datetime import datetime
 
@@ -60,12 +65,17 @@ from utils import (
     log,
     ProjectPaths,
     ensure_dir,
+    consensus_geometry,
     detect_gutter,
+    measure_quad_offsets,
+    boundary_shift,
     page_mask,
     resolve_rotation,
     resolve_gutter,
     resolve_crop_quad,
+    resolve_crop_anchor,
     bring_to_front,
+    WATCHDOG_ALERT_FRAC,
 )
 from p5_crop import (
     crop_double_page,
@@ -225,6 +235,16 @@ class ReviewApp:
         meta = json.loads((self.paths.json / "metadata.json").read_text())
         self.fps = meta["fps"]
 
+        # Default crop box for frames with no manual correction in effect: one
+        # box voted across the session (the rig is static). Computed once and
+        # cached in json/, so only the first launch of a project pays the ~2 s.
+        self._consensus = None
+        if mode == "double":
+            self._consensus = consensus_geometry(
+                self.paths.images, self.keyframes,
+                cache_path=self.paths.json / "consensus_geometry.json", log_fn=log,
+            )
+
         # State
         self.current_idx = 0
         self.actions = {}  # index_in_list -> action key
@@ -266,6 +286,17 @@ class ReviewApp:
         # computed lazily on first view and cached (like _geom_cache).
         self._crop_preview_cache = {}
 
+        # Boundary watchdog (double mode): a background thread re-measures the
+        # page boundary on every frame against the box in effect there and
+        # flags persistent shifts. Results land in _watch_scores via _watch_q;
+        # the E key walks the flagged frames.
+        self._watch_scores = {}  # idx -> {"score": px, "measured", "flagged"}
+        self._watch_gen = 0
+        self._watch_q = queue.Queue()
+        self._watch_done = False
+        self._queue_ring = []  # flagged idxs, worst first
+        self._queue_pos = 0
+
         # Restore cover/doc_start from keyframe data
         for i, kf in enumerate(self.keyframes):
             if kf.get("is_cover"):
@@ -276,6 +307,9 @@ class ReviewApp:
         self._build_ui()
         self._bind_keys()
         self._show_current()
+        if self.mode == "double":
+            self._start_watchdog()
+            self.root.after(300, self._poll_watchdog)
 
     def _build_ui(self):
         bg, fg, dim = "#0a0a0a", "#e2e8f0", "#64748b"
@@ -291,6 +325,10 @@ class ReviewApp:
             top, text="", font=("Menlo", 10), bg="#111", fg="#22c55e"
         )
         self.lbl_stats.pack(side="left", padx=8)
+        # Watchdog status: scan progress, then the alert count E cycles through.
+        self.lbl_queue = tk.Label(top, text="", font=("Menlo", 10), bg="#111",
+                                  fg="#f59e0b")
+        self.lbl_queue.pack(side="left", padx=8)
         self._button(
             top,
             self._save,
@@ -397,7 +435,7 @@ class ReviewApp:
         # G means "edit geometry": the spread split in double mode, the crop box
         # in single mode (where each frame is already one page).
         split_hint = (
-            "G Split    (crop box)\n"
+            "G Split    (crop box)\nE Next ⚠   (watchdog)\n"
             if self.mode == "double"
             else "G Crop     (adjust box)\n"
         )
@@ -465,6 +503,14 @@ class ReviewApp:
             "c",
             lambda e: (
                 self._toggle_center()
+                if not self._in_text() and not self._editing()
+                else None
+            ),
+        )
+        self.root.bind(
+            "e",
+            lambda e: (
+                self._go_queue()
                 if not self._in_text() and not self._editing()
                 else None
             ),
@@ -665,6 +711,18 @@ class ReviewApp:
                         width=2,
                         dash=dash,
                     )
+                ws = self._watch_scores.get(idx)
+                if ws and ws["flagged"]:
+                    detail = (
+                        f"boundary shifted ~{ws['score']:.0f}px since the box was set"
+                        if ws["measured"]
+                        else "page boundary not measurable here"
+                    )
+                    self.canvas.create_text(
+                        cw // 2, iy0 + dh - 14,
+                        text=f"⚠ {detail} — press G to check",
+                        fill="#f59e0b", font=("Menlo", 11, "bold"),
+                    )
 
             # Single mode: preview the crop p5 will make, so you can spot a bad
             # auto-crop without entering the editor. A confirmed manual override
@@ -766,6 +824,7 @@ class ReviewApp:
         self.actions = new_actions
         self._geom_cache.clear()  # indices shifted
         self._crop_preview_cache.clear()
+        self._start_watchdog()  # scores are keyed by index
 
         self.pending_inserts.append(new_kf)
         self.session_log.append(
@@ -823,18 +882,20 @@ class ReviewApp:
         """Crop box + split line for the always-on preview, or None.
 
         Reproduces the p5→p6 path at full resolution: the manual crop box in
-        effect (own or propagated from an earlier correction), else the auto
-        crop (page mask + margin) mapped back through the deskew rotation onto
-        the raw frame. The split line is the gutter fraction applied between
-        the box's left and right edges, so both overlays show exactly what p5
-        will crop and p6 will cut, tilt included.
+        effect (own or propagated verbatim from an earlier correction), else
+        the session's consensus box, else — only when no consensus could be
+        voted — the per-frame auto crop (page mask + margin) mapped back
+        through the deskew rotation onto the raw frame. The split line is the
+        gutter fraction applied between the box's left and right edges, so
+        both overlays show exactly what p5 will crop and p6 will cut, tilt
+        included.
 
         Must use the full-resolution frame: the page mask, tilt, and bounds are
         resolution-dependent (a downscale can even flip ``crop_double_page``
         into its whole-frame fallback when the spread doesn't fill the frame).
         Returns ``{"box": 4 fractional corners, "box_src": "manual" /
-        "inherited" / "auto", "line": 2 fractional endpoints}``. Cached per
-        frame; invalidated when an override changes."""
+        "inherited" / "consensus" / "auto", "line": 2 fractional endpoints}``.
+        Cached per frame; invalidated when an override changes."""
         if idx in self._geom_cache:
             return self._geom_cache[idx]
         kf = self.keyframes[idx]
@@ -843,10 +904,13 @@ class ReviewApp:
             img = cv2.imread(str(self.paths.images / kf["filename"]))
             h, w = img.shape[:2]
             quad = resolve_crop_quad(self.keyframes, idx)
+            box_src = "manual" if kf.get("crop_quad") else "inherited"
+            if quad is None and self._consensus:
+                quad = self._consensus["quad"]
+                box_src = "consensus"
             frac = kf.get("gutter")
             if quad is not None:
                 box = [(float(x), float(y)) for x, y in quad]
-                box_src = "manual" if kf.get("crop_quad") else "inherited"
                 if frac is None:
                     quad_px = np.array(
                         [[x * w, y * h] for x, y in box], dtype=np.float32
@@ -910,12 +974,13 @@ class ReviewApp:
         """Load the editor's box + gutter from the frame's resolved geometry.
 
         The box seeds from this frame's own crop_quad, else one propagated
-        from an earlier correction, else the auto crop (page mask + margin)
-        mapped onto the raw frame — so the editor always opens showing exactly
-        what Phase 5 would do. The gutter seeds from the frame's own override,
-        else spine detection on that box's crop, tracking the nearest earlier
-        correction as a prior (idx-1, so this frame's own override doesn't
-        seed itself after a reset). Returns False if the frame can't be read."""
+        from an earlier correction, else the session's consensus box, else
+        the per-frame auto crop (page mask + margin) mapped onto the raw
+        frame — so the editor always opens showing exactly what Phase 5 would
+        do. The gutter seeds from the frame's own override, else spine
+        detection on that box's crop, tracking the nearest earlier correction
+        as a prior (idx-1, so this frame's own override doesn't seed itself
+        after a reset). Returns False if the frame can't be read."""
         kf = self.keyframes[idx]
         img = cv2.imread(str(self.paths.images / kf["filename"]))
         if img is None:
@@ -923,9 +988,12 @@ class ReviewApp:
         h, w = img.shape[:2]
         self._crop_W, self._crop_H = w, h
         quad = resolve_crop_quad(self.keyframes, idx)
+        self._split_box_src = "manual" if kf.get("crop_quad") else "inherited"
+        if quad is None and self._consensus:
+            quad = self._consensus["quad"]
+            self._split_box_src = "consensus"
         if quad is not None:
             self._set_rect_from_quad([[x * w, y * h] for x, y in quad])
-            self._split_box_src = "manual" if kf.get("crop_quad") else "inherited"
             cropped = crop_to_quad(
                 img, np.array(self._quad_from_rect(), dtype=np.float32), 0.0
             )
@@ -980,8 +1048,10 @@ class ReviewApp:
         kf.pop("crop_margin", None)
         kf.pop("crop_quad", None)
         # Removing overrides changes what later frames inherit, so drop all
-        # cached previews, not just this frame's.
+        # cached previews, not just this frame's, and re-measure the watchdog
+        # against the geometry now in effect.
         self._geom_cache.clear()
+        self._start_watchdog(self.current_idx)
         # An earlier correction may still propagate here after the reset — the
         # re-seed resolves the box/gutter chain afresh.
         self._seed_split_editor(self.current_idx)
@@ -1006,8 +1076,11 @@ class ReviewApp:
             kf.pop("crop_margin", None)
         # The gutter, rotation, and box all propagate forward as defaults, so a
         # confirm changes every later frame's inherited geometry — invalidate
-        # the whole cache, not just this frame's.
+        # the whole cache, not just this frame's. A new box also re-anchors
+        # the watchdog for every later frame.
         self._geom_cache.clear()
+        if self._split_box_dirty:
+            self._start_watchdog(self.current_idx)
         self.session_log.append(
             {
                 "time": datetime.now().isoformat(),
@@ -1061,8 +1134,9 @@ class ReviewApp:
             self.canvas.winfo_width() // 2,
             iy0 + 14,
             text=(
-                f"SPLIT — drag box/corners/gutter  ←/→ gutter  ↑/↓ move  "
-                f"⇧arrows size  [ / ] tilt ({self._crop_angle:+.2f}°)  "
+                f"SPLIT — drag inside = gutter  ⇧drag = move box  "
+                f"corners/edges resize  ←/→ gutter  ↑/↓ move  "
+                f"[ / ] tilt ({self._crop_angle:+.2f}°)  "
                 f"Enter save  Esc cancel  ⌫ reset   "
                 f"gutter={self._split_frac:.3f} {self._split_gutter_src}  "
                 f"box={self._split_box_src}"
@@ -1299,12 +1373,18 @@ class ReviewApp:
         qx, qy = ax + t * dx, ay + t * dy
         return ((px - qx) ** 2 + (py - qy) ** 2) ** 0.5
 
-    def _hit_test(self, cx, cy):
+    def _hit_test(self, cx, cy, shift=False):
         """What the pointer is over, in canvas px, or None.
 
-        Priority: corner handles, then the gutter line (split editor only),
-        then box edges, then the box interior — small targets win over the
-        large ones they sit on."""
+        Priority: corner handles, then box edges, then the interior. In the
+        split editor the whole interior is a *gutter* target — placing the
+        split is the operation you point inside a correct box for, and making
+        box-move require ⇧ means a missed grab can no longer silently drag a
+        300 px translation into the stored crop (the trap that produced most
+        of a real session's phantom corrections: the gutter line stays pinned
+        to the frame while the box pans, so the operator watching the line
+        never saw the box slide). In the single-mode editor the interior
+        moves the box as before — there is no gutter to place."""
         ix0, iy0, scale = self._crop_geom
         pts = [
             (ix0 + x * scale, iy0 + y * scale) for x, y in self._quad_from_rect()
@@ -1312,12 +1392,6 @@ class ReviewApp:
         for k, (hx, hy) in enumerate(pts):
             if abs(cx - hx) <= 10 and abs(cy - hy) <= 10:
                 return {"kind": "corner", "corner": k}
-        if self.split_mode:
-            (x1, y1), (x2, y2) = self._gutter_segment(self._split_frac)
-            a = (ix0 + x1 * scale, iy0 + y1 * scale)
-            b = (ix0 + x2 * scale, iy0 + y2 * scale)
-            if self._seg_dist((cx, cy), a, b) <= 8:
-                return {"kind": "gutter"}
         for k in range(4):
             if self._seg_dist((cx, cy), pts[k], pts[(k + 1) % 4]) <= 8:
                 return {"kind": "edge", "edge": k}
@@ -1326,13 +1400,23 @@ class ReviewApp:
         du = (fx - self._crop_cx) * ux + (fy - self._crop_cy) * uy
         dv = (fx - self._crop_cx) * vx + (fy - self._crop_cy) * vy
         if abs(du) <= self._crop_w / 2 and abs(dv) <= self._crop_h / 2:
+            if self.split_mode and not shift:
+                return {"kind": "gutter"}
             return {"kind": "move", "last": (fx, fy)}
         return None
 
     def _on_mouse_down(self, e):
         if not self._editing():
             return
-        self._drag = self._hit_test(e.x, e.y)
+        self._drag = self._hit_test(e.x, e.y, shift=bool(e.state & 0x0001))
+        if self._drag and self._drag["kind"] == "gutter":
+            # Place the line where the click landed — "the spine is here".
+            ix0, iy0, scale = self._crop_geom
+            self._split_frac = self._frac_of_point(
+                ((e.x - ix0) / scale, (e.y - iy0) / scale)
+            )
+            self._split_gutter_src = "manual"
+            self._draw_split_overlay()
 
     def _on_mouse_drag(self, e):
         if not self._editing() or not self._drag:
@@ -1373,7 +1457,7 @@ class ReviewApp:
         """Cursor feedback so the drag targets are discoverable."""
         if not self._editing() or self._drag:
             return
-        hit = self._hit_test(e.x, e.y)
+        hit = self._hit_test(e.x, e.y, shift=bool(e.state & 0x0001))
         if not hit:
             cur = ""
         elif hit["kind"] == "corner":
@@ -1512,6 +1596,152 @@ class ReviewApp:
             tags="ov",
         )
 
+    # ── Boundary watchdog + review queue (double mode) ──
+    #
+    # Validation on a real 60-correction session showed the page boundary
+    # can't be trusted to *move* the crop box (the fanned page stack shifts
+    # the paper outline while the book holds still), but a persistent shift
+    # is a reliable sign that something real happened. So the watchdog only
+    # watches: a daemon thread walks the keyframes, measures each frame's
+    # boundary against the box in effect there (manual anchor or consensus),
+    # smooths over a 3-frame window, and flags frames whose boundary moved
+    # beyond the alert threshold or couldn't be measured. E cycles the flags.
+
+    def _start_watchdog(self, from_idx=0):
+        """(Re)start the background scan for frames ``from_idx`` onward.
+
+        Called on startup and whenever geometry the scan compared against
+        changes (a confirmed or reset box re-anchors every later frame; a
+        save or insert renumbers everything). Bumping the generation makes
+        the old thread's remaining results fall on the floor."""
+        if self.mode != "double":
+            return
+        self._watch_gen += 1
+        self._watch_done = False
+        for i in [i for i in self._watch_scores if i >= from_idx]:
+            del self._watch_scores[i]
+        self._rebuild_queue_ring()
+        threading.Thread(
+            target=self._watchdog_worker,
+            args=(self._watch_gen, copy.deepcopy(self.keyframes), from_idx),
+            daemon=True,
+        ).start()
+
+    def _watchdog_worker(self, gen, kfs, from_idx):
+        """Measure every frame's boundary against its in-effect box.
+
+        Runs off the Tk thread on a snapshot of the keyframes; touches only
+        image files and the result queue. A manual anchor's baseline is
+        measured on the anchor frame's own image; the consensus baseline
+        ships with the consensus (measured on the voted mask). Frames whose
+        box comes from neither (no consensus, pure per-frame auto) aren't
+        scored — there is no stable reference to compare against."""
+        anchor_key, anchor, window = None, None, []
+        for idx, kf in enumerate(kfs):
+            if self._watch_gen != gen:
+                return
+            if kf.get("is_cover"):
+                continue
+            quad_frac, a_idx = resolve_crop_anchor(kfs, idx)
+            if quad_frac is None:
+                if not self._consensus:
+                    continue
+                quad_frac, a_idx = self._consensus["quad"], "consensus"
+            if a_idx != anchor_key:
+                anchor_key, anchor, window = a_idx, None, []
+            if idx < from_idx:
+                continue
+            if anchor is None:
+                if a_idx == "consensus":
+                    anchor = (self._consensus["edge_ref"],
+                              self._consensus["edge_rel"])
+                else:
+                    aimg = cv2.imread(
+                        str(self.paths.images / kfs[a_idx]["filename"])
+                    )
+                    if aimg is None:
+                        anchor = "unavailable"
+                    else:
+                        ah, aw = aimg.shape[:2]
+                        anchor = measure_quad_offsets(
+                            aimg, np.array(quad_frac, float) * [aw, ah]
+                        )
+            if anchor == "unavailable":
+                continue
+            if a_idx == idx:
+                # The operator set this frame's box by hand — trusted.
+                self._watch_q.put((gen, idx, 0.0, True, False))
+                continue
+            img = cv2.imread(str(self.paths.images / kf["filename"]))
+            if img is None:
+                continue
+            h, w = img.shape[:2]
+            off, rel = measure_quad_offsets(
+                img, np.array(quad_frac, float) * [w, h]
+            )
+            window.append((off, rel))
+            if len(window) > 3:
+                window.pop(0)
+            score, measured = boundary_shift(
+                anchor[0], anchor[1],
+                [o for o, _ in window], [r for _, r in window],
+            )
+            flagged = (not measured) or score > WATCHDOG_ALERT_FRAC * w
+            self._watch_q.put((gen, idx, float(score), measured, flagged))
+        self._watch_q.put((gen, None, 0.0, True, False))
+
+    def _poll_watchdog(self):
+        """Drain worker results into _watch_scores on the Tk thread."""
+        touched = set()
+        try:
+            while True:
+                gen, idx, score, measured, flagged = self._watch_q.get_nowait()
+                if gen != self._watch_gen:
+                    continue
+                if idx is None:
+                    self._watch_done = True
+                else:
+                    self._watch_scores[idx] = {
+                        "score": score, "measured": measured, "flagged": flagged
+                    }
+                touched.add(idx)
+        except queue.Empty:
+            pass
+        if touched:
+            self._rebuild_queue_ring()
+            self._update_queue_label()
+            # A flag for the frame on screen should appear without navigation.
+            if self.current_idx in touched and not self._editing():
+                self._show_current()
+        self.root.after(300, self._poll_watchdog)
+
+    def _rebuild_queue_ring(self):
+        """Flagged frames, most actionable first: big measured shifts, then
+        the frames the watchdog couldn't measure at all."""
+        flagged = [(i, s) for i, s in self._watch_scores.items() if s["flagged"]]
+        flagged.sort(key=lambda t: (not t[1]["measured"], -t[1]["score"]))
+        self._queue_ring = [i for i, _ in flagged]
+        self._queue_pos = 0
+
+    def _update_queue_label(self):
+        n = len(self._queue_ring)
+        if not self._watch_done:
+            txt = f"watchdog {len(self._watch_scores)}/{len(self.keyframes)}…"
+            if n:
+                txt += f" ⚠{n}"
+        else:
+            txt = f"⚠ {n} to check (E)" if n else "watchdog ✓"
+        self.lbl_queue.config(text=txt, fg="#f59e0b" if n else "#475569")
+
+    def _go_queue(self):
+        """Jump to the next watchdog-flagged frame (E), cycling."""
+        if self.mode != "double" or not self._queue_ring:
+            return
+        self._queue_pos %= len(self._queue_ring)
+        self.current_idx = self._queue_ring[self._queue_pos]
+        self._queue_pos += 1
+        self._show_current()
+
     # ── Save ──
     def _save(self):
         # Collect deletions
@@ -1595,6 +1825,7 @@ class ReviewApp:
         self.actions = {}
         self._geom_cache.clear()  # indices shifted after deletions
         self._crop_preview_cache.clear()
+        self._start_watchdog()  # scores are keyed by index
 
         # Re-flag covers/doc_starts from data
         for i, kf in enumerate(self.keyframes):

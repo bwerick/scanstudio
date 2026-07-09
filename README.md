@@ -197,12 +197,13 @@ Tkinter GUI for reviewing and correcting the keyframe selection. This phase is r
 | `6` | Mark as Doc Start |
 | `I` | Insert frame (opens video scrubber) |
 | `C` | Toggle center line |
-| `G` | Adjust geometry: a draggable crop box over the raw frame — drag inside to move, drag a corner/edge to resize, `[` `]` tilt, `⇧`+arrows resize. **double** adds the gutter line (drag it, or `←`/`→`; `↑`/`↓` move the box). `Enter` save, `Esc` cancel, `Backspace` reset |
+| `E` | Jump to the next watchdog-flagged frame (double mode; cycles) |
+| `G` | Adjust geometry: a draggable crop box over the raw frame — drag a corner/edge to resize, `[` `]` tilt, `⇧`+arrows resize. **double**: drag anywhere inside the box to place the gutter line (`←`/`→` nudge it), `⇧`+drag inside to move the box (`↑`/`↓` too). **single**: drag inside to move the box. `Enter` save, `Esc` cancel, `Backspace` reset |
 | `⌘S` | Save |
 
 `G` adapts to `MODE=` (the `review` target passes it through automatically):
 
-- **double** — a crop box around the spread plus the gutter (split) line inside it. Corrections propagate forward to later spreads until the next correction: the box and its tilt as fixed values (the rig doesn't move between page turns), the gutter as a tracking prior. Frames you never touch keep the automatic page-mask crop. Confirming a touched box stores it as 4 corners (`crop_quad`), and P5 warps exactly that box.
+- **double** — a crop box around the spread plus the gutter (split) line inside it. Frames you never touch use the session's **consensus box**: the page mask is voted across a sample of frames (a hand or mid-turn page in any one frame is outvoted) and its minimum-area rectangle — snug fit and tilt in one shot — applies to the whole session, cached in `json/consensus_geometry.json`. Corrections propagate forward to later spreads until the next correction: the box and its tilt verbatim (measured on real sessions, the book doesn't move between corrections beyond noise), the gutter as a tracking prior. Confirming a touched box stores it as 4 corners (`crop_quad`), and P5 warps exactly that box. A background **watchdog** re-measures every frame's page boundary against the box in effect and flags frames where it shifted persistently (a bumped book) or couldn't be measured — the top bar counts alerts and `E` cycles through them, so a review pass means checking the short list, not every spread.
 - **single** — the gutter overlay is hidden (each frame is already one page). The same crop box editor covers cases where the GrabCut auto-crop (P5) clips real text or wanders as page sizes vary (e.g. receipts). Confirming stores the box as 4 corners on the keyframe, and P5 warps exactly that box instead of auto-detecting; unlike double mode the box does **not** propagate. A confirmed crop is drawn as a green box during review.
 
 ### P5 — Crop
@@ -213,7 +214,7 @@ make crop VIDEO=recordings/mybook.mp4
 
 Crops the book/page out of the surrounding frame. Modifies `images/` in-place. Re-run P3 to restore originals.
 
-- `double` mode: warps the P4 manual crop box (`crop_quad`) in effect — this frame's own or one propagated from an earlier correction; otherwise applies crop bounds from P4 + page-mask background detection
+- `double` mode: warps the P4 manual crop box (`crop_quad`) in effect — this frame's own or one propagated from an earlier correction; otherwise warps the session's consensus box (one box voted across frames, so the output stays steady); crop bounds + per-frame page-mask detection only when no consensus could be voted
 - `single` mode: warps a P4 manual crop box (`crop_quad`) if present (no propagation); otherwise uses GrabCut to segment the page from the table surface (handles rotation, works with any page color)
 
 ### P6 — Split Pages
@@ -305,7 +306,7 @@ make bw VIDEO=recordings/african_founders.mp4
 
 **No peaks detected** — The video may have low-contrast page turns. Check `plots/motion_plot.png` to inspect the signal. Adjust peak detection parameters in `scripts/p2_detect_peaks.py`.
 
-**Crop removes too much / too little** — Press `G` in P4 review and drag the crop box where it belongs; it propagates to later spreads until your next correction. (`SAFETY_MARGIN` only pads the automatic crop on untouched frames.) For an off-center spine, drag the `G` gutter line.
+**Crop removes too much / too little** — Press `G` in P4 review and fix the box: drag its corners/edges, or `⇧`+drag inside to move it; it propagates to later spreads until your next correction. For an off-center spine, drag anywhere inside the box to place the gutter line. If the consensus box looks stale after re-recording, delete `json/consensus_geometry.json` to re-vote it. (`SAFETY_MARGIN` only pads the legacy per-frame auto crop, used when no consensus exists.)
 
 **Binarization looks wrong** — Try `BW_METHOD=adaptive`, or tune `BW_K` (Sauvola stroke weight; higher = thinner), `BLOCK_SIZE` (larger = coarser regions), and `BW_OFFSET` (adaptive only).
 
