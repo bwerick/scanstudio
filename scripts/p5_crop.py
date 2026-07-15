@@ -3,11 +3,13 @@
 Phase 5: Crop Keyframes
 
 Two modes:
-  double (default): For book spreads — a manual crop box from Phase-4 review
-           (crop_quad, propagated forward from the nearest earlier correction)
-           wins; otherwise the session's consensus box (voted once from a
-           sample of frames — the rig is static, so one box fits the whole
-           session); per-frame page-mask detection only as a last resort.
+  double (default): For book spreads — the frame's own manual crop box from
+           Phase-4 review (crop_quad) wins; then the Phase-4 boundary
+           tracker's box (crop_quad_track: the nearest earlier correction
+           translated to follow the book on this frame); then that
+           correction propagated verbatim; then the session's consensus box
+           (voted once from a sample of frames); per-frame page-mask
+           detection only as a last resort.
   single: For loose documents — a per-frame manual crop_quad wins; otherwise
            GrabCut segments the page from the table. Handles rotation, works
            with any page color.
@@ -402,16 +404,26 @@ def main():
                 cropped, method = crop_single_page(img, args.padding)
 
         else:
-            # Double-page. A manual crop box from Phase-4 review wins outright:
-            # it propagates forward verbatim from the nearest earlier
-            # correction (measured on real sessions: the book never moves
-            # beyond noise between corrections), is drawn on the raw frame,
-            # and encodes position, size, and tilt at once. With no correction
-            # in effect the session's consensus box applies — same box on
-            # every frame, so the output is steady instead of flickering with
-            # each frame's detection quirks.
-            quad = None if is_cover else resolve_crop_quad(keyframes, i)
-            method = "manual_quad" if kf.get("crop_quad") else "inherited_quad"
+            # Double-page. The frame's own manual box from Phase-4 review
+            # wins outright: drawn on the raw frame, it encodes position,
+            # size, and tilt at once. Next comes the boundary tracker's box
+            # (crop_quad_track, stamped at Phase-4 save): the nearest
+            # earlier correction translated to follow the book on this
+            # frame, so the crop rides along when the book drifts. A frame
+            # the tracker never reached falls back to that correction
+            # verbatim, and with no correction at all the session's
+            # consensus box applies — same box on every frame, so the
+            # output is steady instead of flickering with each frame's
+            # detection quirks.
+            quad, method = None, "manual_quad"
+            if not is_cover:
+                quad = kf.get("crop_quad")
+                if quad is None:
+                    quad = kf.get("crop_quad_track")
+                    method = "tracked_quad"
+                if quad is None:
+                    quad = resolve_crop_quad(keyframes, i)
+                    method = "inherited_quad"
             if quad is None and not is_cover and consensus:
                 quad = consensus["quad"]
                 method = "consensus_quad"

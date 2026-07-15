@@ -272,24 +272,26 @@ def resolve_crop_quad(keyframes, idx):
     return resolve_crop_anchor(keyframes, idx)[0]
 
 
-# ── Consensus box + boundary watchdog (double mode) ──────────
+# ── Consensus box + boundary tracker (double mode) ──────────
 #
-# The capture rig is static: across a real session the spread sits in nearly
-# the same spot in every frame (measured operator corrections vary by under
-# 1% of the frame width, and the page boundary itself never shifted beyond
-# measurement noise). Cropping therefore shouldn't re-guess every frame.
-# Instead one *consensus* box is voted from a sample of frames — robust to
-# the hands, glare, or mid-turn pages that break any single frame — and an
-# operator correction propagates forward verbatim.
+# The intended semantics: the crop box *follows the book*. One *consensus*
+# box is voted from a sample of frames — robust to the hands, glare, or
+# mid-turn pages that break any single frame — and an operator correction
+# becomes the tracking anchor from that frame on. The per-edge boundary
+# measurement then keeps the box on the book as it drifts around the frame,
+# so minor shifts never need a keypress.
 #
-# The per-edge boundary measurement exists as a *watchdog*, not an
-# auto-corrector: validation against a 60-correction session showed that
-# following the measured boundary makes boxes worse (the fanned page stack
-# under the spread moves the paper outline even while the book holds still),
-# but a *persistent* boundary shift beyond ~2% of the frame width reliably
-# means something real happened (a bumped book, a new resting position).
-# Phase 4's review queue measures every frame in the background and flags
-# those, so the operator checks a handful of frames instead of all of them.
+# The tracker's motion model is deliberately rigid. Validation against a
+# 60-correction session showed that following each measured edge
+# independently makes boxes worse (the fanned page stack under the spread
+# moves the paper outline even while the book holds still). A moving *book*
+# shows up as opposing edges shifting together — rigid translation — while
+# the fan shows up as edges moving apart — expansion. ``rigid_shift``
+# decomposes the smoothed per-edge deltas into exactly those two parts: the
+# translation is applied, the expansion never is, only scored. Phase 4
+# flags frames whose non-rigid residual exceeds ~2% of the frame width, or
+# that can't be measured at all (occlusion), for an operator's glance —
+# everything else the box handles by itself.
 
 # Mask/measure at this width: page_mask's 25 px morphology is tuned for
 # roughly this scale, and it keeps a 4K frame cheap (~60 ms).
@@ -302,6 +304,11 @@ TRACK_BAND_FRAC = 0.04
 # curl, the fanned stack, a hand); a median-smoothed shift beyond ~2% is a
 # real event worth an operator's glance.
 WATCHDOG_ALERT_FRAC = 0.02
+# Tracker dead-band: the box only moves when the estimated translation
+# differs from the currently applied one by more than this fraction of the
+# frame width. Below it is measurement wobble (pairing + median-of-3 puts
+# noise around 0.5–0.7% p90) and a static box shouldn't jitter with it.
+TRACK_DEADBAND_FRAC = 0.006
 CONSENSUS_SAMPLES = 15
 
 
@@ -392,31 +399,68 @@ def measure_quad_offsets(img, quad_px, band_px=None):
     return [o / s for o in off], rel
 
 
-def boundary_shift(anchor_off, anchor_rel, off_window, rel_window):
-    """Watchdog score: how far the page boundary has moved since the anchor.
+def quad_edge_bases(quad):
+    """Each edge's scalar position along its outward normal, plus the axes.
 
-    ``off_window``/``rel_window`` are per-edge measurements from a few
-    consecutive keyframes (the current one and its neighbours); each edge's
-    delta against the anchor baseline is median-smoothed across the window,
-    so a one-frame artifact — a hand, a lifted page fan — cannot alert, while
-    a shift that *persists* does. Validation on a real session: single-frame
-    deltas false-alarm as often as they detect, median-of-3 deltas beyond 2%
-    of the frame width are real events.
-
-    Returns ``(score, measured)``: the largest smoothed |delta| over the
-    edges measurable in both the anchor and the window (px), and whether any
-    edge was measurable at all (an immeasurable frame deserves a glance too).
+    Projects the midpoint of each edge (top, right, bottom, left) onto that
+    edge's outward normal. Adding a measured boundary offset to the base
+    turns it into an *absolute* boundary position in frame coordinates —
+    comparable across measurements taken against differently-placed boxes,
+    which is what lets the tracker measure around the box it has already
+    moved. Returns ``(bases, (u, v))`` with bases in the quad's units.
     """
-    score, measured = 0.0, False
+    tl, tr, br, bl = [np.asarray(p, dtype=float) for p in quad]
+    u, v = _quad_axes(quad)
+    mids = ((tl + tr) / 2, (tr + br) / 2, (bl + br) / 2, (tl + bl) / 2)
+    normals = (-v, u, v, -u)
+    return [float(m @ n) for m, n in zip(mids, normals)], (u, v)
+
+
+def rigid_shift(anchor_s, anchor_rel, s_window, rel_window):
+    """Split the boundary's movement since the anchor into rigid + residual.
+
+    Inputs are per-edge *absolute* boundary positions (edge base + measured
+    offset, see ``quad_edge_bases``), for the anchor and for a window of a
+    few consecutive keyframes. Each edge is median-smoothed across the
+    window exactly as the old watchdog was — a one-frame artifact (a hand, a
+    lifted page fan) cannot move the box or alert, while a change that
+    *persists* does; validated on a real session, single-frame deltas
+    false-alarm as often as they detect.
+
+    Opposing edges are then paired: their antisymmetric part is rigid
+    translation (the book moved — the tracker follows it), their symmetric
+    part is expansion (the paper outline grew — the fanned-stack artifact
+    that made naive per-edge following worse than a static box, so it is
+    only ever reported). An edge whose partner is unmeasurable can't be
+    decomposed: that axis isn't tracked and the whole delta counts as
+    residual.
+
+    Returns ``(shift, residual, measured)``: ``shift`` is ``[t_u, t_v]``
+    along the box axes (px, None = axis untracked), ``residual`` the worst
+    non-rigid |delta| (px), ``measured`` whether any edge was measurable at
+    all (an immeasurable frame deserves a glance too).
+    """
+    d = [None] * 4
     for k in range(4):
         if not anchor_rel[k]:
             continue
-        vals = [o[k] for o, r in zip(off_window, rel_window) if r[k]]
-        if len(vals) < (len(off_window) + 1) // 2:
+        vals = [s[k] for s, r in zip(s_window, rel_window) if r[k]]
+        if len(vals) < (len(s_window) + 1) // 2:
             continue
-        measured = True
-        score = max(score, abs(float(np.median(vals)) - anchor_off[k]))
-    return score, measured
+        d[k] = float(np.median(vals)) - anchor_s[k]
+    measured = any(x is not None for x in d)
+    shift, residual = [None, None], 0.0
+    # Axis pairs as (positive-normal edge, negative-normal edge):
+    # u = (right, left), v = (bottom, top).
+    for ax, (kp, km) in enumerate(((1, 3), (2, 0))):
+        if d[kp] is not None and d[km] is not None:
+            shift[ax] = (d[kp] - d[km]) / 2
+            residual = max(residual, abs((d[kp] + d[km]) / 2))
+        else:
+            for k in (kp, km):
+                if d[k] is not None:
+                    residual = max(residual, abs(d[k]))
+    return shift, residual, measured
 
 
 def consensus_geometry(images_dir, keyframes, cache_path=None,
@@ -428,8 +472,8 @@ def consensus_geometry(images_dir, keyframes, cache_path=None,
     a mid-turn page in any one frame is outvoted), and takes the largest
     blob's minimum-area rectangle — a snug rotated box with the session's
     angle built in. Also measures the box's per-edge baseline boundary
-    offsets on the voted mask, which is what ``track_quad`` needs to use the
-    consensus as a tracking anchor on frames with no manual correction yet.
+    offsets on the voted mask, which is what the boundary tracker needs to
+    use the consensus as its anchor on frames with no manual correction yet.
 
     Returns ``{"quad": 4 fractional corners, "edge_ref": [4 offsets in
     full-res px], "edge_rel": [4 bools], "size": [W, H]}`` or None when there

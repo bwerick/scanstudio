@@ -24,22 +24,26 @@ Keys:
        resize). Enter save + validate, Esc cancel, ⌫ reset.
   ⌘S   Save
 
-In double mode every frame starts from the session's *consensus* crop box —
-voted once from a sample of frames (the rig is static, so one box fits the
-whole session) — and a confirmed manual box propagates forward verbatim until
-the next correction. Measured on real sessions, the book never moves beyond
-noise between corrections, so the box that needs zero per-frame fiddling is
-the last one you drew. The gutter still propagates as a tracking prior: later
-spreads re-detect the spine in a tight band around your last hint.
+In double mode the crop box *follows the book*. Every frame starts from the
+session's *consensus* crop box — voted once from a sample of frames — and a
+confirmed manual box becomes the tracking anchor from that frame on. A
+background *tracker* re-measures where the page boundary sits on every frame
+and translates the box to follow it, so when the book drifts around the frame
+the box rides along and no keypress is needed. Only the rigid part of the
+motion is followed (opposing edges shifting together = the book moved);
+edges moving apart is the fanned-page-stack artifact and is never applied.
+The gutter is stored relative to the box, so it rides along too, and still
+re-detects the spine in a tight band around your last hint.
 
-A background *watchdog* re-measures where the page boundary sits on every
-frame; when it shifts persistently (a bumped book, a new resting position) or
-can't be measured at all, the frame is flagged — the top bar counts alerts
-and E jumps through them, so reviewing means checking a short list rather
-than eyeballing every spread.
+Frames the tracker can't handle are flagged: the boundary couldn't be
+measured at all (hands everywhere, occlusion) or it changed shape beyond
+what a moving book explains. The top bar counts alerts and E jumps through
+them, so reviewing means checking a short list rather than eyeballing every
+spread.
 
 Validation is monotonic: pressing 1 (or confirming G) *pins* the geometry in
-effect onto the keyframe — crop_quad plus gutter — and marks it validated, so
+effect onto the keyframe — the crop_quad on screen (tracked box included)
+plus gutter — and marks it validated, so
 no later correction, rescan, or relaunch can change its crop or put it back
 in the watchdog queue; the to-check count only ever shrinks. Pinning also
 makes every validated frame the anchor for the frames after it (box
@@ -79,7 +83,8 @@ from utils import (
     consensus_geometry,
     detect_gutter,
     measure_quad_offsets,
-    boundary_shift,
+    quad_edge_bases,
+    rigid_shift,
     page_mask,
     resolve_rotation,
     resolve_gutter,
@@ -87,6 +92,7 @@ from utils import (
     resolve_crop_anchor,
     bring_to_front,
     WATCHDOG_ALERT_FRAC,
+    TRACK_DEADBAND_FRAC,
 )
 from p5_crop import (
     crop_double_page,
@@ -305,11 +311,12 @@ class ReviewApp:
         # computed lazily on first view and cached (like _geom_cache).
         self._crop_preview_cache = {}
 
-        # Boundary watchdog (double mode): a background thread re-measures the
-        # page boundary on every frame against the box in effect there and
-        # flags persistent shifts. Results land in _watch_scores via _watch_q;
-        # the E key walks the flagged frames.
-        self._watch_scores = {}  # idx -> {"score": px, "measured", "flagged"}
+        # Boundary tracker (double mode): a background thread re-measures the
+        # page boundary on every frame and translates the box to follow the
+        # book, flagging what it can't explain (occlusion, non-rigid change).
+        # Results land in _watch_scores via _watch_q; "quad" is the tracked
+        # box for that frame (None = sits on its anchor). E walks the flags.
+        self._watch_scores = {}  # idx -> {"score", "measured", "flagged", "quad"}
         self._watch_gen = 0
         self._watch_q = queue.Queue()
         self._watch_done = False
@@ -705,9 +712,9 @@ class ReviewApp:
             if self.mode == "double" and not is_cover:
                 geom = self._frame_geometry(idx)
                 if geom:
-                    box_dash = {"manual": (), "inherited": (8, 3)}.get(
-                        geom["box_src"], (4, 4)
-                    )
+                    box_dash = {
+                        "manual": (), "track": (8, 3), "inherited": (8, 3)
+                    }.get(geom["box_src"], (4, 4))
                     pts = []
                     for fx, fy in geom["box"]:
                         pts += [ix0 + fx * dw, iy0 + fy * dh]
@@ -732,7 +739,8 @@ class ReviewApp:
                 ws = self._watch_scores.get(idx)
                 if ws and ws["flagged"] and idx not in self.validated:
                     detail = (
-                        f"boundary shifted ~{ws['score']:.0f}px since the box was set"
+                        f"outline changed shape ~{ws['score']:.0f}px — more "
+                        "than a moving book explains"
                         if ws["measured"]
                         else "page boundary not measurable here"
                     )
@@ -813,9 +821,11 @@ class ReviewApp:
         A validated frame is settled — the watchdog reports it trusted, the
         queue never shows it again, and because the pin makes the geometry the
         frame's *own*, no later correction can re-anchor it. Deliberately does
-        NOT restart the watchdog: the pinned values equal what already
-        propagated here, so existing scores stay valid and validating never
-        triggers a rescan (that churn was the old non-monotonic behavior)."""
+        NOT restart the watchdog: the pinned values equal what the tracker
+        already placed here — and later frames were tracked through this same
+        position — so existing scores and tracked boxes stay valid and
+        validating never triggers a rescan (that churn was the old
+        non-monotonic behavior)."""
         self.validated.add(idx)
         self.keyframes[idx]["validated"] = True
         self._pin_geometry(idx)
@@ -844,9 +854,9 @@ class ReviewApp:
         """Freeze the geometry in effect at ``idx`` onto the keyframe.
 
         Stamps only the fields the frame doesn't already own: in double mode
-        the resolved crop box (own → inherited → consensus → auto) and the
-        gutter fraction the preview shows; in single mode the auto-detected
-        crop box. The stamped values are exactly what was on screen, so the
+        the resolved crop box (own → tracked → inherited → consensus → auto)
+        and the gutter fraction the preview shows; in single mode the
+        auto-detected crop box. The stamped values are exactly what was on screen, so the
         pin changes nothing visually — it just makes the geometry immune to
         later corrections and turns this frame into the anchor (box, gutter
         prior, watchdog baseline) for the frames after it. Previous values go
@@ -987,21 +997,24 @@ class ReviewApp:
     def _frame_geometry(self, idx):
         """Crop box + split line for the always-on preview, or None.
 
-        Reproduces the p5→p6 path at full resolution: the manual crop box in
-        effect (own or propagated verbatim from an earlier correction), else
-        the session's consensus box, else — only when no consensus could be
-        voted — the per-frame auto crop (page mask + margin) mapped back
-        through the deskew rotation onto the raw frame. The split line is the
-        gutter fraction applied between the box's left and right edges, so
-        both overlays show exactly what p5 will crop and p6 will cut, tilt
-        included.
+        Reproduces the p5→p6 path at full resolution: the frame's own manual
+        box, else the tracker's box for this frame (the nearest anchor
+        translated to follow the book — from _watch_scores once measured,
+        else the crop_quad_track persisted last session), else the anchor box
+        propagated verbatim, else the session's consensus box, else — only
+        when no consensus could be voted — the per-frame auto crop (page
+        mask + margin) mapped back through the deskew rotation onto the raw
+        frame. The split line is the gutter fraction applied between the
+        box's left and right edges, so both overlays show exactly what p5
+        will crop and p6 will cut, tilt included.
 
         Must use the full-resolution frame: the page mask, tilt, and bounds are
         resolution-dependent (a downscale can even flip ``crop_double_page``
         into its whole-frame fallback when the spread doesn't fill the frame).
         Returns ``{"box": 4 fractional corners, "box_src": "manual" /
-        "inherited" / "consensus" / "auto", "line": 2 fractional endpoints}``.
-        Cached per frame; invalidated when an override changes."""
+        "track" / "inherited" / "consensus" / "auto", "line": 2 fractional
+        endpoints}``. Cached per frame; invalidated when an override changes
+        or the tracker (re)places this frame's box."""
         if idx in self._geom_cache:
             return self._geom_cache[idx]
         kf = self.keyframes[idx]
@@ -1011,6 +1024,14 @@ class ReviewApp:
             h, w = img.shape[:2]
             quad = resolve_crop_quad(self.keyframes, idx)
             box_src = "manual" if kf.get("crop_quad") else "inherited"
+            if kf.get("crop_quad") is None:
+                ws = self._watch_scores.get(idx)
+                tq = (
+                    ws.get("quad") if ws is not None
+                    else kf.get("crop_quad_track")
+                )
+                if tq is not None:
+                    quad, box_src = tq, "track"
             if quad is None and self._consensus:
                 quad = self._consensus["quad"]
                 box_src = "consensus"
@@ -1096,6 +1117,14 @@ class ReviewApp:
         self._crop_W, self._crop_H = w, h
         quad = resolve_crop_quad(self.keyframes, idx)
         self._split_box_src = "manual" if kf.get("crop_quad") else "inherited"
+        if kf.get("crop_quad") is None:
+            # Seed from the tracked box when there is one, so the editor
+            # opens on exactly the box the preview showed instead of
+            # snapping back to the anchor.
+            ws = self._watch_scores.get(idx)
+            tq = ws.get("quad") if ws is not None else kf.get("crop_quad_track")
+            if tq is not None:
+                quad, self._split_box_src = tq, "track"
         if quad is None and self._consensus:
             quad = self._consensus["quad"]
             self._split_box_src = "consensus"
@@ -1148,6 +1177,10 @@ class ReviewApp:
         kf.pop("rotation_deg", None)
         kf.pop("crop_margin", None)
         kf.pop("crop_quad", None)
+        # A persisted tracked box was measured against the chain that
+        # included the override just removed — stale now; the rescan below
+        # re-tracks this frame against the geometry newly in effect.
+        kf.pop("crop_quad_track", None)
         # Removing overrides changes what later frames inherit, so drop all
         # cached previews, not just this frame's, and re-measure the watchdog
         # against the geometry now in effect.
@@ -1683,16 +1716,22 @@ class ReviewApp:
             tags="ov",
         )
 
-    # ── Boundary watchdog + review queue (double mode) ──
+    # ── Boundary tracker + review queue (double mode) ──
     #
-    # Validation on a real 60-correction session showed the page boundary
-    # can't be trusted to *move* the crop box (the fanned page stack shifts
-    # the paper outline while the book holds still), but a persistent shift
-    # is a reliable sign that something real happened. So the watchdog only
-    # watches: a daemon thread walks the keyframes, measures each frame's
-    # boundary against the box in effect there (manual anchor or consensus),
-    # smooths over a 3-frame window, and flags frames whose boundary moved
-    # beyond the alert threshold or couldn't be measured. E cycles the flags.
+    # The box follows the book. A daemon thread walks the keyframes,
+    # measures each frame's page boundary around the box currently in
+    # effect there, and translates the box to keep it on the book — so the
+    # operator never presses G for a drift the measurement can see. The
+    # motion model is deliberately rigid: validation on a real
+    # 60-correction session showed the boundary can't be trusted edge by
+    # edge (the fanned page stack shifts the paper outline while the book
+    # holds still), so only opposing-edges-together translation is applied
+    # (rigid_shift), median-smoothed over a 3-frame window with a dead-band
+    # against jitter. What tracking can't explain — a non-rigid residual
+    # beyond the alert threshold, or a boundary that couldn't be measured
+    # at all — flags the frame; E cycles the flags. Tracked boxes land in
+    # _watch_scores["quad"], feed the preview and 1-pinning, and persist as
+    # crop_quad_track at save so p5 crops exactly what review showed.
 
     def _start_watchdog(self, from_idx=0):
         """(Re)start the background scan for frames ``from_idx`` onward.
@@ -1715,15 +1754,26 @@ class ReviewApp:
         ).start()
 
     def _watchdog_worker(self, gen, kfs, from_idx):
-        """Measure every frame's boundary against its in-effect box.
+        """Track every frame's box against the boundary; score the residual.
 
         Runs off the Tk thread on a snapshot of the keyframes; touches only
         image files and the result queue. A manual anchor's baseline is
         measured on the anchor frame's own image; the consensus baseline
         ships with the consensus (measured on the voted mask). Frames whose
         box comes from neither (no consensus, pure per-frame auto) aren't
-        scored — there is no stable reference to compare against."""
+        tracked — there is no stable reference to compare against.
+
+        Each frame is measured around the box the tracker last placed (not
+        the raw anchor box), so the ±4%-of-width measurement band travels
+        with the book and cumulative drift beyond the band stays trackable.
+        The measurements are converted to absolute per-edge positions
+        (quad_edge_bases) so the smoothing window stays commensurable across
+        moved boxes, and the estimate itself is anchored — box = anchor +
+        estimated translation, never box += delta — so noise cannot random-
+        walk the box away from a static book."""
         anchor_key, anchor, window = None, None, []
+        quad0 = bases0 = axes = anchor_s = None
+        shift_uv = [0.0, 0.0]  # applied translation, anchor-axis components
         for idx, kf in enumerate(kfs):
             if self._watch_gen != gen:
                 return
@@ -1736,6 +1786,8 @@ class ReviewApp:
                 quad_frac, a_idx = self._consensus["quad"], "consensus"
             if a_idx != anchor_key:
                 anchor_key, anchor, window = a_idx, None, []
+                quad0 = None
+                shift_uv = [0.0, 0.0]
             if idx < from_idx:
                 continue
             if anchor is None:
@@ -1757,40 +1809,66 @@ class ReviewApp:
                 continue
             if a_idx == idx:
                 # The operator set this frame's box by hand — trusted.
-                self._watch_q.put((gen, idx, 0.0, True, False))
+                self._watch_q.put((gen, idx, 0.0, True, False, None))
                 continue
             img = cv2.imread(str(self.paths.images / kf["filename"]))
             if img is None:
                 continue
             h, w = img.shape[:2]
-            off, rel = measure_quad_offsets(
-                img, np.array(quad_frac, float) * [w, h]
-            )
-            window.append((off, rel))
+            if quad0 is None:
+                quad0 = np.array(quad_frac, float) * [w, h]
+                bases0, axes = quad_edge_bases(quad0)
+                anchor_s = [b + o for b, o in zip(bases0, anchor[0])]
+            tq = quad0 + shift_uv[0] * axes[0] + shift_uv[1] * axes[1]
+            off, rel = measure_quad_offsets(img, tq)
+            bases, _ = quad_edge_bases(tq)
+            window.append(([b + o for b, o in zip(bases, off)], rel))
             if len(window) > 3:
                 window.pop(0)
-            score, measured = boundary_shift(
-                anchor[0], anchor[1],
-                [o for o, _ in window], [r for _, r in window],
+            shift, resid, measured = rigid_shift(
+                anchor_s, anchor[1],
+                [s for s, _ in window], [r for _, r in window],
             )
-            flagged = (not measured) or score > WATCHDOG_ALERT_FRAC * w
-            self._watch_q.put((gen, idx, float(score), measured, flagged))
-        self._watch_q.put((gen, None, 0.0, True, False))
+            for ax in (0, 1):
+                if shift[ax] is not None and (
+                    abs(shift[ax] - shift_uv[ax]) > TRACK_DEADBAND_FRAC * w
+                ):
+                    shift_uv[ax] = shift[ax]
+            flagged = (not measured) or resid > WATCHDOG_ALERT_FRAC * w
+            if shift_uv[0] or shift_uv[1]:
+                tq = quad0 + shift_uv[0] * axes[0] + shift_uv[1] * axes[1]
+                tq_frac = [[float(x) / w, float(y) / h] for x, y in tq]
+            else:
+                tq_frac = None  # box sits exactly on its anchor
+            self._watch_q.put(
+                (gen, idx, float(resid), measured, flagged, tq_frac)
+            )
+        self._watch_q.put((gen, None, 0.0, True, False, None))
 
     def _poll_watchdog(self):
         """Drain worker results into _watch_scores on the Tk thread."""
         touched = set()
         try:
             while True:
-                gen, idx, score, measured, flagged = self._watch_q.get_nowait()
+                gen, idx, score, measured, flagged, quad = (
+                    self._watch_q.get_nowait()
+                )
                 if gen != self._watch_gen:
                     continue
                 if idx is None:
                     self._watch_done = True
                 else:
+                    prev = self._watch_scores.get(idx)
                     self._watch_scores[idx] = {
-                        "score": score, "measured": measured, "flagged": flagged
+                        "score": score, "measured": measured,
+                        "flagged": flagged, "quad": quad,
                     }
+                    # The preview may have been drawn before the tracked box
+                    # arrived — from the anchor, or from a stale
+                    # crop_quad_track of a previous session — or the box
+                    # moved on a rescan. Recompute it lazily.
+                    if prev is None or prev.get("quad") != quad:
+                        self._geom_cache.pop(idx, None)
                 touched.add(idx)
         except queue.Empty:
             pass
@@ -1803,8 +1881,9 @@ class ReviewApp:
         self.root.after(300, self._poll_watchdog)
 
     def _rebuild_queue_ring(self):
-        """Flagged frames, most actionable first: big measured shifts, then
-        the frames the watchdog couldn't measure at all. Validated frames are
+        """Flagged frames, most actionable first: big non-rigid residuals
+        (the boundary changed shape beyond what tracking follows), then the
+        frames that couldn't be measured at all. Validated frames are
         settled and never re-enter, whatever their score says — this is what
         makes the to-check count monotonic."""
         flagged = [
@@ -1837,6 +1916,22 @@ class ReviewApp:
 
     # ── Save ──
     def _save(self):
+        # Persist the tracker's per-frame boxes so p5 crops exactly what the
+        # review preview showed. Stale values from a previous session are
+        # dropped first — the tracker recomputes every frame each run, and a
+        # frame the sweep hasn't reached yet simply falls back to its anchor
+        # in p5. Must happen before deletions shift the indices that key
+        # _watch_scores. Frames with their own crop_quad (manual or pinned)
+        # don't need one.
+        for i, kf in enumerate(self.keyframes):
+            kf.pop("crop_quad_track", None)
+            ws = self._watch_scores.get(i)
+            tq = ws.get("quad") if ws else None
+            if tq is not None and kf.get("crop_quad") is None:
+                kf["crop_quad_track"] = [
+                    [round(float(x), 5), round(float(y), 5)] for x, y in tq
+                ]
+
         # Collect deletions
         del_indices = sorted(
             [i for i, a in self.actions.items() if a in ("dup", "occlusion", "other")],
