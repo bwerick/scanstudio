@@ -10,17 +10,18 @@ Usage:
 
 Keys:
   →/D  Next    ←/A  Prev
-  1    Keep    2    Delete: Duplicate    3    Delete: Occlusion
-  4    Delete: Other    5    Cover    6    Doc Start
+  1    Keep — validates the frame: the geometry in effect is pinned onto the
+       keyframe and the frame permanently leaves the watchdog queue
+  2    Delete: Duplicate    3    Delete: Occlusion    4    Delete: Other
+  5    Cover    6    Doc Start
   I    Insert frame (video scrubber)
   C    Toggle center guide
   E    Jump to the next frame the watchdog flagged (double mode)
   G    Adjust geometry — double: crop box + gutter; single: crop box
-       Mouse (double): drag anywhere inside the box to place the gutter,
-       ⇧+drag inside to move the box, drag a corner or edge to resize.
-       Mouse (single): drag inside to move the box, corners/edges to resize.
-       Keys: [ / ] tilt, ⇧+arrows resize; double adds ←/→ gutter + ↑/↓ move,
-       single arrows move. Enter save, Esc cancel, ⌫ reset. Marks Keep.
+       Arrows translate the box over the fixed frame, ⇧+arrows resize about
+       its center, [ / ] tilt. The gutter is mouse-only: drag anywhere inside
+       the box to place it (⇧+drag inside moves the box, corners/edges
+       resize). Enter save + validate, Esc cancel, ⌫ reset.
   ⌘S   Save
 
 In double mode every frame starts from the session's *consensus* crop box —
@@ -36,6 +37,16 @@ frame; when it shifts persistently (a bumped book, a new resting position) or
 can't be measured at all, the frame is flagged — the top bar counts alerts
 and E jumps through them, so reviewing means checking a short list rather
 than eyeballing every spread.
+
+Validation is monotonic: pressing 1 (or confirming G) *pins* the geometry in
+effect onto the keyframe — crop_quad plus gutter — and marks it validated, so
+no later correction, rescan, or relaunch can change its crop or put it back
+in the watchdog queue; the to-check count only ever shrinks. Pinning also
+makes every validated frame the anchor for the frames after it (box
+propagation, gutter tracking prior, watchdog baseline), so reviewing
+front-to-back anchors each frame to its immediate predecessor — the
+strongest temporal prior available — with the session consensus serving only
+as the cold-start default before the first validation.
 
 Single mode (--mode single) reviews loose one-page-per-frame documents: each
 keyframe is one page, so the gutter overlay is hidden. G opens the same crop
@@ -253,6 +264,14 @@ class ReviewApp:
         self.photo = None
         self.show_center_guide = False
         self.session_log = []
+        self.session_start = datetime.now()  # batch start, for review_log timing
+        # Monotonic review: validated frames (1-press or a confirmed editor)
+        # have their geometry pinned onto the keyframe and never re-enter the
+        # watchdog queue. _keep_pins remembers, per idx, the override values a
+        # 1-press stamped (always previously-absent fields) so toggling Keep
+        # off restores them; committed on save.
+        self.validated = set()  # idxs whose crop is operator-approved
+        self._keep_pins = {}  # idx -> {field: previous value (None = absent)}
 
         # Split / geometry adjust, double mode (overrides stored per-keyframe
         # in keyframes.json). Until the operator touches the crop box, cropping
@@ -297,8 +316,12 @@ class ReviewApp:
         self._queue_ring = []  # flagged idxs, worst first
         self._queue_pos = 0
 
-        # Restore cover/doc_start from keyframe data
+        # Restore validated/cover/doc_start from keyframe data (cover and
+        # doc_start win the action slot; validated status is independent).
         for i, kf in enumerate(self.keyframes):
+            if kf.get("validated"):
+                self.validated.add(i)
+                self.actions[i] = "keep"
             if kf.get("is_cover"):
                 self.actions[i] = "cover"
             if kf.get("is_doc_start"):
@@ -442,13 +465,14 @@ class ReviewApp:
         tk.Label(
             hf,
             text=(
-                "1 Keep     2 Dup\n"
+                "1 Keep ✓   2 Dup\n"
                 "3 Occ      4 Other\n"
                 "5 Cover    6 DocStart\n"
                 "I Insert   C Center\n"
                 f"{split_hint}"
                 "←/A Prev   →/D Next\n"
-                "⌘S Save"
+                "⌘S Save\n"
+                "✓ = crop pinned as-is"
             ),
             font=("Menlo", 9),
             bg="#0f0f0f",
@@ -562,18 +586,11 @@ class ReviewApp:
             self._crop_cancel()
 
     def _on_arrow(self, direction, shift=False):
-        if self.split_mode:
-            if shift:
-                # Resize the box about its center: ⇧←/→ width, ⇧↑/↓ height.
-                self._apply_box_change(lambda: self._box_resize_key(direction))
-            elif direction in ("left", "right"):
-                self._split_move(0.002 if direction == "right" else -0.002)
-            else:
-                # ↑/↓ nudge the box vertically (←/→ belongs to the gutter;
-                # pan sideways with the mouse).
-                self._apply_box_change(lambda: self._box_pan_vertical(direction))
-        elif self.crop_mode:
-            self._crop_arrow(direction, shift)
+        if self._editing():
+            # Both editors: arrows translate the box over the fixed frame,
+            # ⇧+arrows resize about its center. The gutter is mouse-only.
+            fn = self._box_resize_key if shift else self._box_pan_key
+            self._apply_box_change(lambda: fn(direction))
         elif not self._in_text() and not shift:
             if direction == "right":
                 self._go_next()
@@ -612,8 +629,9 @@ class ReviewApp:
         )
         m = kf.get("motion_value", 0)
         mc = "#22c55e" if m < 2.0 else "#f59e0b" if m < 3.0 else "#ef4444"
+        validated = "  |  ✓ validated" if idx in self.validated else ""
         self.lbl_detail.config(
-            text=f"Motion: {m:.2f}  |  Sharp: {kf.get('sharpness',0):.0f}  |  Src: {kf.get('source','?')}",
+            text=f"Motion: {m:.2f}  |  Sharp: {kf.get('sharpness',0):.0f}  |  Src: {kf.get('source','?')}{validated}",
             fg=mc,
         )
 
@@ -712,7 +730,7 @@ class ReviewApp:
                         dash=dash,
                     )
                 ws = self._watch_scores.get(idx)
-                if ws and ws["flagged"]:
+                if ws and ws["flagged"] and idx not in self.validated:
                     detail = (
                         f"boundary shifted ~{ws['score']:.0f}px since the box was set"
                         if ws["measured"]
@@ -768,8 +786,16 @@ class ReviewApp:
         idx = self.current_idx
         if self.actions.get(idx) == action:
             del self.actions[idx]
+            if action == "keep":
+                self._unvalidate(idx)
         else:
             self.actions[idx] = action
+            if action == "keep":
+                self._validate(idx)
+            elif idx in self.validated:
+                # Any non-keep action revokes the approval (a deleted or
+                # cover frame must not keep anchoring later ones).
+                self._unvalidate(idx)
         self.session_log.append(
             {
                 "time": datetime.now().isoformat(),
@@ -779,6 +805,80 @@ class ReviewApp:
             }
         )
         self._show_current()
+
+    # ── Validation: pin geometry, leave the queue for good ──
+    def _validate(self, idx):
+        """Approve ``idx``'s crop: pin its geometry and mark it validated.
+
+        A validated frame is settled — the watchdog reports it trusted, the
+        queue never shows it again, and because the pin makes the geometry the
+        frame's *own*, no later correction can re-anchor it. Deliberately does
+        NOT restart the watchdog: the pinned values equal what already
+        propagated here, so existing scores stay valid and validating never
+        triggers a rescan (that churn was the old non-monotonic behavior)."""
+        self.validated.add(idx)
+        self.keyframes[idx]["validated"] = True
+        self._pin_geometry(idx)
+        if self.mode == "double":
+            self._rebuild_queue_ring()
+            self._update_queue_label()
+
+    def _unvalidate(self, idx):
+        """Revoke approval: restore any fields the 1-press pin stamped."""
+        self.validated.discard(idx)
+        self.keyframes[idx].pop("validated", None)
+        pins = self._keep_pins.pop(idx, None)
+        if pins:
+            kf = self.keyframes[idx]
+            for field, prev in pins.items():
+                if prev is None:
+                    kf.pop(field, None)
+                else:
+                    kf[field] = prev
+            self._geom_cache.pop(idx, None)
+        if self.mode == "double":
+            self._rebuild_queue_ring()
+            self._update_queue_label()
+
+    def _pin_geometry(self, idx):
+        """Freeze the geometry in effect at ``idx`` onto the keyframe.
+
+        Stamps only the fields the frame doesn't already own: in double mode
+        the resolved crop box (own → inherited → consensus → auto) and the
+        gutter fraction the preview shows; in single mode the auto-detected
+        crop box. The stamped values are exactly what was on screen, so the
+        pin changes nothing visually — it just makes the geometry immune to
+        later corrections and turns this frame into the anchor (box, gutter
+        prior, watchdog baseline) for the frames after it. Previous values go
+        to ``_keep_pins`` so toggling Keep off undoes the stamp."""
+        kf = self.keyframes[idx]
+        pins = {}
+        if self.mode == "double":
+            if kf.get("is_cover") or self.actions.get(idx) == "cover":
+                return
+            geom = self._frame_geometry(idx)
+            if geom is None:
+                return
+            if kf.get("crop_quad") is None:
+                pins["crop_quad"] = None
+                kf["crop_quad"] = [
+                    [round(x, 5), round(y, 5)] for x, y in geom["box"]
+                ]
+                if self._geom_cache.get(idx):
+                    self._geom_cache[idx]["box_src"] = "manual"
+            if kf.get("gutter") is None:
+                pins["gutter"] = None
+                kf["gutter"] = round(geom["frac"], 4)
+        else:
+            if kf.get("crop_quad") is None:
+                quad = self._auto_crop_quad(idx)
+                if quad:
+                    pins["crop_quad"] = None
+                    kf["crop_quad"] = [
+                        [round(x, 5), round(y, 5)] for x, y in quad
+                    ]
+        if pins:
+            self._keep_pins.setdefault(idx, {}).update(pins)
 
     def _toggle_center(self):
         self.show_center_guide = not self.show_center_guide
@@ -817,11 +917,17 @@ class ReviewApp:
                 break
             insert_at = i + 1
         self.keyframes.insert(insert_at, new_kf)
-        # Shift action indices past the insertion point
+        # Shift action/validated/pin indices past the insertion point
         new_actions = {}
         for k, v in self.actions.items():
             new_actions[k + 1 if k >= insert_at else k] = v
         self.actions = new_actions
+        self.validated = {
+            i + 1 if i >= insert_at else i for i in self.validated
+        }
+        self._keep_pins = {
+            k + 1 if k >= insert_at else k: v for k, v in self._keep_pins.items()
+        }
         self._geom_cache.clear()  # indices shifted
         self._crop_preview_cache.clear()
         self._start_watchdog()  # scores are keyed by index
@@ -934,6 +1040,7 @@ class ReviewApp:
             geom = {
                 "box": box,
                 "box_src": box_src,
+                "frac": float(frac),
                 "line": (
                     (tl[0] + frac * (tr[0] - tl[0]), tl[1] + frac * (tr[1] - tl[1])),
                     (bl[0] + frac * (br[0] - bl[0]), bl[1] + frac * (br[1] - bl[1])),
@@ -1020,15 +1127,6 @@ class ReviewApp:
         )
         return True
 
-    def _split_move(self, delta):
-        if not self.split_mode:
-            return
-        self._split_frac = max(0.05, min(0.95, self._split_frac + delta))
-        self._split_gutter_src = "manual"
-        # Only the gutter line moves — redraw the overlay, not the (expensive)
-        # base image, so nudging stays responsive on a 4K-ish frame.
-        self._draw_split_overlay()
-
     def _split_rotate(self, delta):
         if not self.split_mode:
             return
@@ -1042,6 +1140,9 @@ class ReviewApp:
         if not self.split_mode:
             return
         kf = self.keyframes[self.current_idx]
+        # A reset is an explicit "re-derive this frame": revoke the approval
+        # (restoring any 1-press pins) before dropping every override.
+        self._unvalidate(self.current_idx)
         kf.pop("gutter", None)
         kf.pop("gutter_raw", None)
         kf.pop("rotation_deg", None)
@@ -1092,6 +1193,9 @@ class ReviewApp:
             }
         )
         self.split_mode = False
+        # A confirmed editor is an approval: pin whatever wasn't touched
+        # (e.g. the box, when only the gutter moved) and settle the frame.
+        self._validate(self.current_idx)
         self._show_current()
 
     def _split_cancel(self):
@@ -1132,14 +1236,16 @@ class ReviewApp:
             )
         self.canvas.create_text(
             self.canvas.winfo_width() // 2,
-            iy0 + 14,
+            iy0 + 6,
+            anchor="n",
+            justify="center",
+            width=max(240, self.canvas.winfo_width() - 24),
             text=(
-                f"SPLIT — drag inside = gutter  ⇧drag = move box  "
-                f"corners/edges resize  ←/→ gutter  ↑/↓ move  "
-                f"[ / ] tilt ({self._crop_angle:+.2f}°)  "
-                f"Enter save  Esc cancel  ⌫ reset   "
-                f"gutter={self._split_frac:.3f} {self._split_gutter_src}  "
-                f"box={self._split_box_src}"
+                f"SPLIT   gutter {self._split_frac:.3f} "
+                f"({self._split_gutter_src})   box {self._split_box_src}   "
+                f"tilt {self._crop_angle:+.2f}°\n"
+                "arrows move · ⇧arrows resize · [ ] tilt · drag = gutter · "
+                "⇧drag = move · ⏎ save · ⎋ cancel · ⌫ reset"
             ),
             fill="#22ff66",
             font=("Menlo", 10),
@@ -1311,10 +1417,13 @@ class ReviewApp:
         elif direction == "down":
             self._crop_h = max(0.05 * H, self._crop_h - 0.01 * H)
 
-    def _box_pan_vertical(self, direction):
-        H = self._crop_H
-        self._crop_cy += -0.004 * H if direction == "up" else 0.004 * H
-        self._crop_cy = max(0.0, min(H, self._crop_cy))
+    def _box_pan_key(self, direction):
+        """Arrow-key translate: the frame stays fixed, the box moves over it."""
+        W, H = self._crop_W, self._crop_H
+        dx = {"left": -0.004 * W, "right": 0.004 * W}.get(direction, 0.0)
+        dy = {"up": -0.004 * H, "down": 0.004 * H}.get(direction, 0.0)
+        self._crop_cx = max(0.0, min(W, self._crop_cx + dx))
+        self._crop_cy = max(0.0, min(H, self._crop_cy + dy))
 
     def _drag_corner(self, k, fx, fy):
         """Resize by dragging corner ``k``, keeping the opposite corner pinned."""
@@ -1470,33 +1579,6 @@ class ReviewApp:
             cur = "fleur"
         self.canvas.configure(cursor=cur)
 
-    def _crop_arrow(self, direction, shift):
-        W, H = self._crop_W, self._crop_H
-        if shift:
-            # Resize about the center: ←/→ width, ↑/↓ height.
-            if direction == "left":
-                self._crop_w = max(0.05 * W, self._crop_w - 0.01 * W)
-            elif direction == "right":
-                self._crop_w = min(1.5 * W, self._crop_w + 0.01 * W)
-            elif direction == "up":
-                self._crop_h = min(1.5 * H, self._crop_h + 0.01 * H)
-            elif direction == "down":
-                self._crop_h = max(0.05 * H, self._crop_h - 0.01 * H)
-        else:
-            # Pan the box, keeping its center within the frame.
-            if direction == "left":
-                self._crop_cx -= 0.004 * W
-            elif direction == "right":
-                self._crop_cx += 0.004 * W
-            elif direction == "up":
-                self._crop_cy -= 0.004 * H
-            elif direction == "down":
-                self._crop_cy += 0.004 * H
-            self._crop_cx = max(0.0, min(W, self._crop_cx))
-            self._crop_cy = max(0.0, min(H, self._crop_cy))
-        self._crop_src = "manual"
-        self._draw_crop_overlay()
-
     def _crop_rotate(self, delta):
         self._crop_angle += delta
         self._crop_src = "manual"
@@ -1505,6 +1587,7 @@ class ReviewApp:
     def _crop_reset(self):
         """Drop the override and re-seed from the auto detector."""
         kf = self.keyframes[self.current_idx]
+        self._unvalidate(self.current_idx)
         kf.pop("crop_quad", None)
         img = cv2.imread(str(self.paths.images / kf["filename"]))
         quad = detect_page_quad(img) if img is not None else None
@@ -1532,6 +1615,7 @@ class ReviewApp:
             }
         )
         self.crop_mode = False
+        self._validate(self.current_idx)
         self._show_current()
 
     def _crop_cancel(self):
@@ -1585,11 +1669,14 @@ class ReviewApp:
             )
         self.canvas.create_text(
             self.canvas.winfo_width() // 2,
-            iy0 + 14,
+            iy0 + 6,
+            anchor="n",
+            justify="center",
+            width=max(240, self.canvas.winfo_width() - 24),
             text=(
-                f"CROP — drag box/corners/edges  arrows move  ⇧+arrows size  "
-                f"[ / ] tilt ({self._crop_angle:+.1f}°)  Enter save  "
-                f"Esc cancel  ⌫ auto   src={self._crop_src}"
+                f"CROP   box {self._crop_src}   tilt {self._crop_angle:+.1f}°\n"
+                "arrows move · ⇧arrows resize · [ ] tilt · "
+                "drag box/corners/edges · ⏎ save · ⎋ cancel · ⌫ auto"
             ),
             fill="#22ff66",
             font=("Menlo", 10),
@@ -1717,8 +1804,14 @@ class ReviewApp:
 
     def _rebuild_queue_ring(self):
         """Flagged frames, most actionable first: big measured shifts, then
-        the frames the watchdog couldn't measure at all."""
-        flagged = [(i, s) for i, s in self._watch_scores.items() if s["flagged"]]
+        the frames the watchdog couldn't measure at all. Validated frames are
+        settled and never re-enter, whatever their score says — this is what
+        makes the to-check count monotonic."""
+        flagged = [
+            (i, s)
+            for i, s in self._watch_scores.items()
+            if s["flagged"] and i not in self.validated
+        ]
         flagged.sort(key=lambda t: (not t[1]["measured"], -t[1]["score"]))
         self._queue_ring = [i for i, _ in flagged]
         self._queue_pos = 0
@@ -1798,14 +1891,21 @@ class ReviewApp:
             json.dumps(self.keyframes, indent=2)
         )
 
-        # Append to review log
+        # Append to review log. "started" is when this batch began (app launch
+        # or the previous save), so timestamp − started is operator time, and
+        # "events" is the per-keypress timeline (actions, inserts, splits,
+        # crops) for time-per-frame / time-per-correction analysis.
+        now = datetime.now()
+        elapsed_min = (now - self.session_start).total_seconds() / 60
         session = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": now.isoformat(),
+            "started": self.session_start.isoformat(),
             "deletions": deleted_info,
             "insertions": [
                 {"frame_index": ins["frame_index"]} for ins in self.pending_inserts
             ],
             "keyframe_count_after": len(self.keyframes),
+            "events": self.session_log,
         }
 
         rl_path = self.paths.json / "review_log.json"
@@ -1819,23 +1919,35 @@ class ReviewApp:
         # Comparison plot
         self._generate_comparison_plot()
 
-        # Reset pending
+        # Reset pending. The next batch's timing starts at this save; the
+        # session dict above keeps the old event list.
+        self.session_log = []
+        self.session_start = now
         self.pending_deletes = []
         self.pending_inserts = []
         self.actions = {}
         self._geom_cache.clear()  # indices shifted after deletions
         self._crop_preview_cache.clear()
-        self._start_watchdog()  # scores are keyed by index
 
-        # Re-flag covers/doc_starts from data
+        # Re-derive validated/cover/doc_start from data (indices shifted). The
+        # 1-press pins are committed now — keyframes.json holds them — so the
+        # undo bookkeeping resets with them.
+        self.validated = set()
+        self._keep_pins = {}
         for i, kf in enumerate(self.keyframes):
+            if kf.get("validated"):
+                self.validated.add(i)
+                self.actions[i] = "keep"
             if kf.get("is_cover"):
                 self.actions[i] = "cover"
             if kf.get("is_doc_start"):
                 self.actions[i] = "doc_start"
+        self._start_watchdog()  # scores are keyed by index
 
         log(
-            f"Saved. {len(self.keyframes)} keyframes, {len(deleted_info)} deleted, {len(session['insertions'])} inserted"
+            f"Saved. {len(self.keyframes)} keyframes, {len(deleted_info)} deleted, "
+            f"{len(session['insertions'])} inserted — {len(session['events'])} events "
+            f"in {elapsed_min:.1f} min"
         )
         messagebox.showinfo(
             "Saved",
