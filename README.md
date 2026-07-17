@@ -7,7 +7,6 @@ A data preparation pipeline for converting book scanning videos into high-qualit
 
 Both paths converge on the same review → crop → split → PDF back half.
 
-For downstream text extraction and dataframe queries from generated PDFs, use the supporting [Document Parser](https://github.com/rlnsanz/document_parser).
 
 ## Quick Start
 
