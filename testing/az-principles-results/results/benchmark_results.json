@@ -1,0 +1,25 @@
+{
+  "setting_a": {
+    "name": "No Textbook",
+    "mcqs_extracted": 0,
+    "description": "Baseline - no source material"
+  },
+  "setting_b": {
+    "name": "Dirty OCR (EasyOCR)",
+    "mcqs_extracted": 0,
+    "mcqs": [],
+    "description": "Raw EasyOCR output"
+  },
+  "setting_c": {
+    "name": "Parsed OCR (DocTR)",
+    "mcqs_extracted": 0,
+    "mcqs": [],
+    "description": "DocTR advanced OCR"
+  },
+  "setting_d": {
+    "name": "Ground Truth PDF",
+    "mcqs_extracted": 0,
+    "mcqs": [],
+    "description": "Direct PDF text extraction"
+  }
+}

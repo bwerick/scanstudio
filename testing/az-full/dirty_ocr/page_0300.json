@@ -1,0 +1,5 @@
+{
+  "page_num": 300,
+  "method": "pymupdf_get_text",
+  "char_count": 0
+}

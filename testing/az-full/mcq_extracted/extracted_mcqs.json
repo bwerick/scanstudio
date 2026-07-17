@@ -1,0 +1,61 @@
+{
+  "total_mcqs": 5,
+  "mcqs": [
+    {
+      "question_id": 1,
+      "question": "What is the primary purpose of real estate licensing?",
+      "choices": {
+        "A": "To ensure public representation by competent individuals",
+        "B": "To increase real estate sales",
+        "C": "To promote real estate development",
+        "D": "To regulate real estate prices"
+      },
+      "source_page": "Chapter 1 - Real Estate Law and Real Estate Business"
+    },
+    {
+      "question_id": 2,
+      "question": "Which of the following is NOT a requirement for a real estate salesperson license in Arizona?",
+      "choices": {
+        "A": "Previous real estate experience",
+        "B": "Passing the state exam",
+        "C": "Being at least 18 years old",
+        "D": "Being a U.S. citizen or resident alien"
+      },
+      "source_page": "Chapter 1 - Real Estate Law and Real Estate Business"
+    },
+    {
+      "question_id": 3,
+      "question": "What is the role of a designated broker in a real estate brokerage?",
+      "choices": {
+        "A": "To manage the brokerage's marketing strategies",
+        "B": "To act on behalf of the employing real estate entity",
+        "C": "To provide legal advice to clients",
+        "D": "To conduct property appraisals"
+      },
+      "source_page": "Chapter 1 - Real Estate Law and Real Estate Business"
+    },
+    {
+      "question_id": 4,
+      "question": "Which of the following is considered a violation of the Sherman Anti-Trust Act?",
+      "choices": {
+        "A": "Setting commissions for all real estate brokerages",
+        "B": "Offering discounts to clients",
+        "C": "Advertising real estate services",
+        "D": "Providing training to new agents"
+      },
+      "source_page": "Chapter 1 - Real Estate Law and Real Estate Business"
+    },
+    {
+      "question_id": 5,
+      "question": "What is the purpose of the Tax Equity and Fiscal Responsibility Act (TEFRA) of 1982 in relation to real estate agents?",
+      "choices": {
+        "A": "To classify real estate agents as independent contractors",
+        "B": "To increase taxes on real estate transactions",
+        "C": "To provide health insurance to real estate agents",
+        "D": "To regulate real estate advertising"
+      },
+      "source_page": "Chapter 1 - Real Estate Law and Real Estate Business"
+    }
+  ],
+  "note": "Correct answers not included - will be provided separately"
+}
