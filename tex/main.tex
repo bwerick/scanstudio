@@ -319,6 +319,124 @@ match the aspect ratio of its source image. Binarized pages are embedded
 losslessly (as bitonal CCITT/Flate) rather than re-encoded as JPEG, which would
 reintroduce the very ringing that careful binarization removes.
 
+\subsection{ScanStudio Evaluation}
+\label{sec:eval}
+
+We evaluate \sys end to end on five complete books---four captured live and one
+from a pre-recorded video---totaling 2{,}081 pages of philosophy and
+programming-languages texts ranging from 219 to 623 pages each
+(Table~\ref{tab:books-per-hour}). Two questions drive the evaluation: how fast does \sys
+digitize (books per hour), and how much manual work remains after capture
+(corrections per book)?
+
+\begin{table}[t!]
+  \centering
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabular}{|c|c|c|c|c|c|}
+    \hline
+    \textbf{Short Title} & \textbf{Authors} & \textbf{Source} & \textbf{Pages} & \textbf{Secs.} & \textbf{BPH}\\
+    \hline\hline
+    \emph{Theories and Things}~\cite{quine1981theories} & W. V. Quine & mp4 & 219 & 829 & 4.3\\
+    \emph{Conjectures and Refutations}~\cite{popper1963conjectures} & Karl Popper & live & 417 & 1057 & 3.4\\
+    \emph{Philosophy of Science}~\cite{shanker2003philosophy} & Anthology & live & 461 & 1327 & 2.7\\
+    \emph{The Formal Semantics of PL}~\cite{winskel1993formal} & Glynn Winskel & live & 361 & 1149 & 3.1\\
+    \emph{Types and Programming Languages}~\cite{pierce2002types} & Benjamin Pierce & live & 623 & 1821 & 2.0\\
+    \hline
+  \end{tabular}
+  \caption{Seconds to video capture an entire book; BPH denotes Books Per
+  Hour.}
+  \label{tab:books-per-hour}
+\end{table}
+
+\begin{table}[t!]
+  \centering
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabular}{|c|c|c|c|c|}
+    \hline
+    \textbf{Short Title} & \textbf{Source} & \textbf{Insertions} & \textbf{Deletions} & \textbf{Secs.}\\
+    \hline\hline
+    \emph{Theories and Things}~\cite{quine1981theories} & mp4 & 3 & 76 & 1062\\
+    \emph{Conjectures and Refutations}~\cite{popper1963conjectures} & live & 0 & 6 & 1460\\
+    \emph{Philosophy of Science}~\cite{shanker2003philosophy} & live & 0 & 1 & 1160\\
+    \emph{The Formal Semantics of PL}~\cite{winskel1993formal} & live & 0 & 5 & 1134\\
+    \emph{Types and Programming Languages}~\cite{pierce2002types} & live & 0 & 20 & 1038\\
+    \hline
+  \end{tabular}
+  \caption{Corrections per book: keyframes inserted and deleted during review
+  (P4), and seconds spent in that stage.}
+  \label{tab:corrs-per-book}
+\end{table}
+
+\subsubsection{Books per Hour}
+\label{sec:eval-bph}
+
+Table~\ref{tab:books-per-hour} reports the wall-clock seconds of video capture for each
+book---the full recording, covers and settling included---and the resulting
+throughput in books per hour (BPH). The headline figure is the sustained rate:
+roughly 1{,}200 pages per hour, or two to four books per hour depending on
+length, from a single operator with one webcam and no specialized hardware. At
+that pace, digitizing a shelf of thirty books is a day's work rather than a
+month's.
+
+Capture time is linear in book length. Across the four live books the per-page
+rate stays in a narrow band (19--24 pages per minute, or just under six
+seconds per spread), so BPH is essentially a function of page count: the
+623-page Pierce yields 2.0 BPH where the 417-page Popper yields 3.4. The
+practical consequence is predictability---capture cost can be estimated from
+page count alone. For the live books these seconds are also the \emph{total}
+operator time to page images: keyframes are committed during the flip-through
+itself (Section~\ref{sec:live}), so nothing remains to run when the book
+closes. The pre-recorded book (Quine, mp4) is filmed at a comparable pace, but
+its keyframes are recovered by the offline pass (P1--P3) afterwards---machine
+time the operator need not attend, though it delays the review stage that
+follows.
+
+\subsubsection{Corrections per Book}
+\label{sec:eval-corrections}
+
+Table~\ref{tab:corrs-per-book} measures the manual work that remains after
+capture: the keyframes the operator \emph{inserted} (spreads the detector
+missed, located by scrubbing the source video) and \emph{deleted} (spurious or
+duplicate captures, dismissed with a keypress) during review (P4), and the
+seconds spent in that stage. Together with the occasional geometry nudge---a
+gutter or crop adjustment that forward-propagation
+(Section~\ref{sec:backhalf}) reduces to roughly one per run of spreads---these
+corrections are precisely the residual labor a future iteration should
+automate away.
+
+The two error modes carry asymmetric costs. A deletion is a single keypress on
+a visibly redundant spread; an insertion means hunting through the source
+video for the missed turn. The offline path is tuned with this asymmetry in
+mind: global peak detection deliberately over-segments---firing on mid-turn
+pauses and re-settles---so that its errors land on the cheap side of the
+ledger. The result for the mp4 book is 3 insertions and 76 deletions, about
+one deletion for every three pages. The four live books tell a different
+story: \emph{zero} insertions anywhere, and deletions an order of magnitude
+rarer (0.2--3.2 per hundred pages, versus 34.7 offline).
+
+The improvement comes from the feedback loop, not a better detector. The live
+state machine sees strictly less than the offline pass---it is causal and
+cannot revise a decision---yet it produces the cleaner keyframe set, because
+the audiovisual confirmation of Section~\ref{sec:live} converts detector
+misses into non-events: when an expected chime fails to sound, the operator
+coaxes the capture out on the spot with a wave of the hand, and the expensive
+error class is eliminated at the source rather than repaired downstream. An
+ounce of UI, it turns out, is worth a pound of AI.
+
+Review time itself is nearly flat---17 to 24 minutes per book---largely
+independent of how many corrections were made, because the stage is dominated
+by inspection rather than repair: the operator pages through each spread once,
+at three to seven seconds per spread on the live books, mostly to confirm it.
+Review is thus already close to a pure confirmation pass, and it is the
+remaining lever: end to end, capture plus review comes to 1.5 books per hour
+(622 pages per hour), so review roughly halves throughput while contributing a
+dwindling number of corrections. As those corrections trend toward zero on the
+live path, the natural next step is to fold confirmation into capture
+itself---a spread verified at the chime needs no second look---and retire the
+pipeline's one remaining interactive stage.
+
 % When merging into the full paper, drop these two lines and let the main
 % document's bibliography resolve these keys (switch to the ACM style).
 \bibliographystyle{plain}
