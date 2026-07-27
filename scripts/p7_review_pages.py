@@ -11,6 +11,10 @@ Keys: →/D next  ←/A prev
           { / } tilt ±1.25°, ⏎ keep, ⎋ cancel, ⌫ reset to as-scanned.
       ⌘S  save
 
+Typing in the note box takes the keyboard: X/F/G and the arrows deliberately
+do nothing there, or they would fire mid-word. ⎋ or ⇥ hands the keys back, as
+does clicking the page.
+
 Geometry is non-destructive. The first time a page is nudged its untouched
 JPEG is stashed in pages_orig/; every Save re-renders pages/<file> from that
 pristine copy, so adjusting a page twice costs one re-encode rather than two
@@ -128,6 +132,8 @@ class PageReviewApp:
         self.canvas = tk.Canvas(main, bg="#111", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True, padx=12, pady=4)
         self.canvas.bind("<Configure>", lambda e: self._show_current())
+        # Clicking the page is the obvious way out of the note box.
+        self.canvas.bind("<Button-1>", lambda e: self._leave_note())
         nav = tk.Frame(main, bg=bg)
         nav.pack(pady=(0, 8))
         self._button(
@@ -188,6 +194,12 @@ class PageReviewApp:
             wrap="word",
         )
         self.note_entry.pack(fill="x", padx=12, pady=4)
+        # Widget-level, so they beat the Text class bindings: ⎋ never reaches
+        # _geom_cancel and ⇥ inserts no tab. "break" is what stops both.
+        for k in ("<Escape>", "<Tab>"):
+            self.note_entry.bind(k, lambda e: (self._leave_note(), "break")[1])
+        for ev in ("<FocusIn>", "<FocusOut>"):
+            self.note_entry.bind(ev, lambda e: self._note_label(self._note_pn))
 
     def _bind_keys(self):
         for d in ("Left", "Right", "Up", "Down"):
@@ -213,6 +225,17 @@ class PageReviewApp:
 
     def _in_note(self):
         return self.root.focus_get() == self.note_entry
+
+    def _leave_note(self):
+        """Hand the keyboard back to the review keys, harvesting what was typed.
+
+        Without this the note box is a trap: it owns every keystroke, and
+        _guard/_nav_key correctly refuse to act while it has focus."""
+        if not self._in_note():
+            return
+        self._save_note()
+        self.root.focus_set()
+        self._note_label(self._note_pn)
 
     def _guard(self, fn, *args):
         """Run a review action unless a text field or the editor owns the key."""
@@ -470,13 +493,16 @@ class PageReviewApp:
             self.note_entry.insert("1.0", n)
 
     def _note_label(self, pn):
+        # The way out is only worth screen space while the box has the keys.
+        hint = "   ⎋ or ⇥ back to the keys" if self._in_note() else ""
         if pn in self.doc_starts:
             self.lbl_note.config(
-                text="◆ document title — click here to name this document's PDF",
+                text="◆ document title — click here to name this document's PDF"
+                + hint,
                 fg="#a855f7",
             )
         else:
-            self.lbl_note.config(text="note", fg="#64748b")
+            self.lbl_note.config(text="note" + hint, fg="#64748b")
 
     def _toggle_drop(self):
         pn = self.pages[self.current_idx]["page_num"]
@@ -584,18 +610,20 @@ class PageReviewApp:
         This is the only thing P9 reads to split the scan into per-document
         PDFs — the note on a First Page becomes that document's title (and its
         filename slug). The first page of the scan is a document start
-        implicitly, so it is never stamped."""
+        implicitly, so it is never stamped — but it does keep its title, or
+        dropping the old page 1 would silently discard the name of whichever
+        page inherits the slot."""
         for i, pg in enumerate(self.pages):
             pn = pg["page_num"]
-            if i > 0 and pn in self.doc_starts:
+            tagged = pn in self.doc_starts
+            if i > 0 and tagged:
                 pg["is_doc_start"] = True
-                title = self.notes.get(pn, "").strip().splitlines()
-                if title and slugify(title[0]):
-                    pg["doc_title"] = title[0].strip()
-                else:
-                    pg.pop("doc_title", None)
             else:
                 pg.pop("is_doc_start", None)
+            title = self.notes.get(pn, "").strip().splitlines() if tagged else []
+            if title and slugify(title[0]):
+                pg["doc_title"] = title[0].strip()
+            else:
                 pg.pop("doc_title", None)
 
     def _save(self):

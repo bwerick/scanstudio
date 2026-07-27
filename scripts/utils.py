@@ -629,11 +629,13 @@ def segment_documents(pages):
     tag (or all of them, when nothing is tagged) form one leading document, so
     an untagged project yields exactly one segment covering the whole scan —
     which is what keeps the single-PDF path identical to its old behaviour.
-    The title is the ``doc_title`` recorded on the starting page, if any."""
+    The title is the ``doc_title`` recorded on the starting page, if any. The
+    leading document reads its title the same way: the first page carries no
+    ``is_doc_start`` (it opens a document implicitly) but may still be named."""
     docs = []
     for pg in pages:
         if not docs or pg.get("is_doc_start"):
-            title = pg.get("doc_title") if docs or pg.get("is_doc_start") else None
+            title = pg.get("doc_title")
             docs.append({"title": title, "slug": slugify(title), "pages": []})
         docs[-1]["pages"].append(pg)
     return docs
