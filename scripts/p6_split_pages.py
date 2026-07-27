@@ -77,6 +77,15 @@ def main():
         log("Skipped.")
         return
 
+    # Regenerating pages/ invalidates P7's pristine copies — they are snapshots
+    # of the *previous* run's pages, so keeping them would make a later P7 save
+    # re-render adjusted pages from a stale baseline.
+    if paths.pages_orig.exists():
+        n_orig = len([p for p in paths.pages_orig.iterdir() if p.is_file()])
+        shutil.rmtree(paths.pages_orig)
+        if n_orig:
+            log(f"  Cleared {n_orig} stale P7 originals (pages_orig/)")
+
     t0 = time.time()
     page_list = []
     page_num = 0
@@ -89,6 +98,7 @@ def main():
 
         frame_idx = kf.get("frame_index", page_num)
         is_cover = kf.get("is_cover", False)
+        first_page_of_kf = len(page_list)  # where this keyframe's pages start
 
         if args.mode == "single":
             # Single-page mode: each keyframe = one page, no split
@@ -181,6 +191,12 @@ def main():
                     }
                 )
 
+        # A spread flagged "Doc Start" in P4 begins a new document; the flag
+        # lands on the first page it produced (the left half of a spread), which
+        # P7 can then move to the exact page with F. P9 reads only this.
+        if kf.get("is_doc_start") and len(page_list) > first_page_of_kf:
+            page_list[first_page_of_kf]["is_doc_start"] = True
+
         if page_num % 50 == 0:
             log(f"  {page_num} pages...")
 
@@ -189,9 +205,12 @@ def main():
 
     (paths.json / "pages.json").write_text(json.dumps(page_list, indent=2))
 
+    n_docs = 1 + sum(1 for pg in page_list[1:] if pg.get("is_doc_start"))
     log("")
     log("PHASE 6 COMPLETE")
     log(f"  Pages: {paths.pages}/ ({len(page_list)} images)")
+    if n_docs > 1:
+        log(f"  Documents: {n_docs} (from P4 Doc Start flags; refine in P7 with F)")
 
 
 if __name__ == "__main__":

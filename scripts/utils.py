@@ -7,6 +7,7 @@ Directory structure per video:
   output/<video_name>/
   ├── images/    # keyframe images (4K), modified in-place
   ├── pages/     # split/cropped individual pages
+  ├── pages_orig/ # pristine copies of pages P7 re-rendered (rotate/translate)
   ├── plots/     # all diagnostic plots
   ├── data/      # .npy signal data
   ├── json/      # all metadata, configs, logs
@@ -15,6 +16,7 @@ Directory structure per video:
 """
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -46,6 +48,9 @@ class ProjectPaths:
         self.base = Path(output_dir)
         self.images = self.base / "images"
         self.pages = self.base / "pages"
+        # Pristine copies of the pages P7 re-rendered, so its rotate/translate
+        # stays adjustable and reversible instead of compounding on itself.
+        self.pages_orig = self.base / "pages_orig"
         self.plots = self.base / "plots"
         self.data = self.base / "data"
         self.json = self.base / "json"
@@ -599,6 +604,39 @@ def text_skew(page, max_deg: float = 3.0) -> float:
         cands = np.arange(best - span, best + span + 1e-9, step)
         best = float(cands[int(np.argmax([score(a) for a in cands]))])
     return best if abs(best) >= 0.05 else 0.0
+
+
+# ── Documents: one scan → many PDFs ──────────────────────────
+#
+# A single recording is usually one physical book, but a book is often several
+# documents (chapters, articles, a run of receipts). Rather than splitting the
+# finished PDF afterwards, the boundaries are marked during review: P4's "Doc
+# Start" on a spread, refined to the exact page with P7's "First Page". Both
+# land on the page entry as ``is_doc_start``, so P9 needs nothing but
+# pages.json to know where each document begins.
+
+
+def slugify(text: str | None, max_len: int = 40) -> str:
+    """Filename-safe slug from a free-text title ('' when there's nothing)."""
+    first = (text or "").strip().splitlines()[0] if (text or "").strip() else ""
+    return re.sub(r"[^a-z0-9]+", "-", first.lower()).strip("-")[:max_len].strip("-")
+
+
+def segment_documents(pages):
+    """Split ``pages`` into documents at every page tagged ``is_doc_start``.
+
+    Returns a list of ``{"title", "slug", "pages"}``. Pages before the first
+    tag (or all of them, when nothing is tagged) form one leading document, so
+    an untagged project yields exactly one segment covering the whole scan —
+    which is what keeps the single-PDF path identical to its old behaviour.
+    The title is the ``doc_title`` recorded on the starting page, if any."""
+    docs = []
+    for pg in pages:
+        if not docs or pg.get("is_doc_start"):
+            title = pg.get("doc_title") if docs or pg.get("is_doc_start") else None
+            docs.append({"title": title, "slug": slugify(title), "pages": []})
+        docs[-1]["pages"].append(pg)
+    return docs
 
 
 def check_overwrite_dir(dir_path: Path) -> bool:

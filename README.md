@@ -40,7 +40,7 @@ A scan flows through numbered phases. The front end produces a recording plus ke
 | P4 | Review Keyframes | **Interactive** |
 | P5 | Crop | Automated |
 | P6 | Split Pages | Automated |
-| P7 | Page Quality Review | **Interactive** |
+| P7 | Page Review | **Interactive** |
 | P8 | Binarize | Automated (optional) |
 | P9 | Build PDF | Automated |
 
@@ -86,12 +86,13 @@ All output is written to `output/<video_name>/`:
 output/<name>/
 ├── images/     # full-resolution keyframe images (modified in-place by crop)
 ├── pages/      # individual split pages ready for PDF
+├── pages_orig/ # pristine copies of pages P7 re-rendered (rotate/translate)
 ├── bw/         # binarized B&W pages (created by make bw)
 ├── plots/      # diagnostic plots (motion signal, peak detection)
 ├── data/       # raw signal arrays (.npy)
 ├── json/       # metadata, keyframe list, review logs
 ├── reports/    # markdown and text reports
-└── pdf/        # <name>.pdf and <name>_bw.pdf
+└── pdf/        # <name>.pdf, <name>_bw.pdf, and one PDF per document
 ```
 
 ## Commands
@@ -110,7 +111,7 @@ Most targets require `VIDEO=path/to/file.mp4`. The exception is `make live`, whi
 | `make review VIDEO=...` | P4: Review keyframes (GUI, reentrant) |
 | `make crop VIDEO=...` | P5: Crop keyframes |
 | `make split VIDEO=...` | P6: Split into individual pages |
-| `make page-review VIDEO=...` | P7: Page quality review (GUI) |
+| `make page-review VIDEO=...` | P7: Page review — drop pages, adjust geometry, mark documents (GUI) |
 | `make binarize VIDEO=...` | P8: Binarize to B&W |
 | `make pdf VIDEO=...` | P9: Build color PDF |
 | `make pdf-bw VIDEO=...` | P9: Build B&W PDF |
@@ -193,7 +194,7 @@ Tkinter GUI for reviewing and correcting the keyframe selection. This phase is r
 | `3` | Delete — Occlusion |
 | `4` | Delete — Other |
 | `5` | Mark as Cover |
-| `6` | Mark as Doc Start |
+| `6` | Mark as Doc Start — this spread begins a new document (P6 passes it to its first page; P7's `F` refines it; P9 gives it its own PDF) |
 | `I` | Insert frame (opens video scrubber) |
 | `C` | Toggle center line |
 | `E` | Jump to the next watchdog-flagged frame (double mode; cycles) |
@@ -224,24 +225,26 @@ make split VIDEO=recordings/mybook.mp4
 
 - `double` mode: splits each keyframe at the center spine into left and right pages → `pages/`
 - `single` mode: copies cropped images directly → `pages/`
+- a spread flagged **Doc Start** in P4 passes its flag to the first page it produced (`is_doc_start` in `pages.json`), where P7 can move it to the exact page and P9 turns it into a separate PDF
 
-### P7 — Page Quality Review (interactive)
+### P7 — Page Review (interactive)
 
 ```bash
 make page-review VIDEO=recordings/mybook.mp4
 ```
 
-Tkinter GUI for flagging page quality. Results saved to `json/page_review.json`.
+Tkinter GUI for dropping bad pages, nudging a page's geometry, and marking where each document starts. Review state is saved to `json/page_review.json`; Save also applies drops, re-renders adjusted pages, and stamps document starts into `json/pages.json`.
 
 | Key | Action |
 |-----|------|
-| `1` | Flag: Great |
-| `2` | Flag: Acceptable |
-| `3` | Flag: Poor |
-| `4` | Flag: Crop issue |
-| `0` | Clear flag |
 | `X` | Toggle drop page |
+| `F` | Toggle **First Page** — this page starts a new document; the note box then names it |
+| `G` | Geometry: arrows translate the page inside its frame, `⇧`+arrows go 5× further, `[` `]` tilt ±0.25°, `{` `}` tilt ±1.25°, `Enter` keep, `Esc` cancel, `Backspace` reset to as-scanned |
 | `⌘S` | Save |
+
+**Geometry is non-destructive.** The first time a page is nudged, its untouched JPEG is stashed in `pages_orig/`; every Save re-renders `pages/<file>` from that pristine copy (rotation about the centre, white fill, same dimensions). Adjusting a page twice therefore costs one re-encode rather than two, `Backspace` restores exactly what P6 produced, and P8/P9 read `pages/` as always. P6 clears `pages_orig/` when it regenerates `pages/`, since those copies would no longer be the right baseline.
+
+**One scan → many PDFs.** A recording is often several documents (chapters, articles, a run of receipts). P4's `6` Doc Start marks a spread; P6 lands it on the first page of that spread; `F` here moves it to the exact page and names it. P9 then writes one PDF per document alongside the combined whole-scan PDF — see below.
 
 ### P8 — Binarize (optional)
 
@@ -260,6 +263,18 @@ make pdf-bw VIDEO=recordings/mybook.mp4   # B&W PDF from bw/
 
 Assembles pages in order into a PDF using reportlab. Output: `pdf/<name>.pdf` or `pdf/<name>_bw.pdf`.
 
+When review marked document starts, P9 *also* writes one PDF per document, named after the combined file and numbered in order, with the document's title as a slug:
+
+```
+pdf/mybook.pdf                     # the whole scan, always written
+pdf/mybook_01.pdf                  # pages before the first mark (untitled)
+pdf/mybook_02_chapter-one.pdf
+pdf/mybook_bw_02_chapter-one.pdf   # same split for make bw
+json/documents.json                # segments, titles, page ranges, PDF names
+```
+
+The combined PDF is always produced, so `make pdf`, `make bw` and anything else expecting `<name>.pdf` are unaffected. Set `SPLIT_DOCS=never` for the combined file only.
+
 ## Configuration
 
 Override parameters on the command line:
@@ -273,6 +288,7 @@ make all VIDEO=recordings/mybook.mp4 MODE=single SAFETY_MARGIN=0.01
 | `VIDEO` | *(required)* | Path to input video file (all targets except `live`) |
 | `NAME` | *(required for `live`)* | Project name; `make live` records to `recordings/<NAME>.mp4` |
 | `MODE` | `double` | `double` for book spreads, `single` for loose documents |
+| `SPLIT_DOCS` | `auto` | `auto` also writes one PDF per document when review marked document starts; `never` writes only the combined PDF |
 | `SAFETY_MARGIN` | `0.005` | Crop safety margin as a fraction of image dimension |
 | `BW_METHOD` | `sauvola` | Binarization method: `sauvola` or `adaptive` |
 | `BW_UPSCALE` | `2` | Grayscale upscale factor before thresholding (anti-aliases edges) |
@@ -291,7 +307,7 @@ make all VIDEO=recordings/mybook.mp4 MODE=single SAFETY_MARGIN=0.01
 make all VIDEO=recordings/african_founders.mp4
 
 # At P4: review keyframes in the GUI, label bad frames, insert missing ones, save with ⌘S
-# At P7: flag page quality, close the window when done
+# At P7: drop bad pages, nudge geometry, mark where each document starts, save with ⌘S
 
 # 2. Optionally produce a B&W version
 make bw VIDEO=recordings/african_founders.mp4

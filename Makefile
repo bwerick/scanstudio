@@ -53,6 +53,9 @@ BW_METHOD     ?= sauvola
 BW_UPSCALE    ?= 2
 BW_K          ?= 0.2
 MODE          ?= double
+# 'auto' also writes one PDF per document when review marked document starts
+# (P4's Doc Start / P7's First Page). The combined <NAME>.pdf is always written.
+SPLIT_DOCS    ?= auto
 # 'auto' picks whichever camera delivers the requested 4K mode (USB indices
 # shift on reconnect). Set CAMERA=<n> to force one; `make probe-camera` lists them.
 CAMERA        ?= auto
@@ -80,7 +83,7 @@ help:
 	@echo "  review        P4: Review keyframes (GUI, reentrant)"
 	@echo "  crop          P5: Crop keyframes"
 	@echo "  split         P6: Split into pages"
-	@echo "  page-review   P7: Page quality review (GUI)"
+	@echo "  page-review   P7: Page review — drop/adjust/mark documents (GUI)"
 	@echo "  binarize      P8: Binarize to B&W"
 	@echo "  pdf           P9: Build PDF"
 	@echo "  pdf-bw        P9: Build B&W PDF"
@@ -90,6 +93,7 @@ help:
 	@echo "  SAFETY_MARGIN=$(SAFETY_MARGIN)  BLOCK_SIZE=$(BLOCK_SIZE)  BW_OFFSET=$(BW_OFFSET)"
 	@echo "  BW_METHOD=$(BW_METHOD) (sauvola|adaptive)  BW_UPSCALE=$(BW_UPSCALE)  BW_K=$(BW_K) (higher=thinner)"
 	@echo "  MODE=$(MODE)  (double=book spreads, single=loose docs)"
+	@echo "  SPLIT_DOCS=$(SPLIT_DOCS)  (auto=one PDF per document too, never=combined only)"
 	@echo "  live: CAMERA=$(CAMERA)  SETTLE=$(SETTLE)  TURN=$(TURN)  SETTLE_TIME=$(SETTLE_TIME)  PREVIEW_HEIGHT=$(PREVIEW_HEIGHT)"
 
 all: motion peaks keyframes finish
@@ -148,11 +152,11 @@ $(BW_META): $(PAGES)
 
 pdf: $(PDF)
 $(PDF): $(PAGES)
-	$(PYTHON) $(SCRIPTS)/p9_build_pdf.py $(OUTDIR)
+	$(PYTHON) $(SCRIPTS)/p9_build_pdf.py $(OUTDIR) --split-docs $(SPLIT_DOCS)
 
 pdf-bw: $(PDF_BW)
 $(PDF_BW): $(BW_META)
-	$(PYTHON) $(SCRIPTS)/p9_build_pdf.py $(OUTDIR) --source bw --pdf-name $(NAME)_bw.pdf
+	$(PYTHON) $(SCRIPTS)/p9_build_pdf.py $(OUTDIR) --source bw --pdf-name $(NAME)_bw.pdf --split-docs $(SPLIT_DOCS)
 
 probe-camera:
 	$(PYTHON) $(SCRIPTS)/probe_camera.py
