@@ -323,6 +323,7 @@ class ReviewApp:
         self._watch_gen = 0
         self._watch_q = queue.Queue()
         self._watch_done = False
+        self._watch_threads = []  # live workers, retired in _stop_watchdog
         self._queue_ring = []  # flagged idxs, worst first
         self._queue_pos = 0
 
@@ -340,9 +341,20 @@ class ReviewApp:
         self._build_ui()
         self._bind_keys()
         self._show_current()
+        # Closing the window must retire the watchdog before the interpreter
+        # goes away — see _stop_watchdog for what happens when it doesn't.
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
         if self.mode == "double":
             self._start_watchdog()
             self.root.after(300, self._poll_watchdog)
+
+    def close(self):
+        """Shut the review down: stop background work, then drop the window."""
+        self._stop_watchdog()
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass    # already destroyed; close() is called on both exit paths
 
     def _build_ui(self):
         bg, fg, dim = "#0a0a0a", "#e2e8f0", "#64748b"
@@ -1751,11 +1763,35 @@ class ReviewApp:
         for i in [i for i in self._watch_scores if i >= from_idx]:
             del self._watch_scores[i]
         self._rebuild_queue_ring()
-        threading.Thread(
+        # A restart doesn't wait for the outgoing worker (that would stall the
+        # UI for a measurement); the generation bump already makes its results
+        # fall on the floor. Keeping the handle is what lets close() wait.
+        self._watch_threads = [t for t in self._watch_threads if t.is_alive()]
+        t = threading.Thread(
             target=self._watchdog_worker,
             args=(self._watch_gen, copy.deepcopy(self.keyframes), from_idx),
             daemon=True,
-        ).start()
+        )
+        self._watch_threads.append(t)
+        t.start()
+
+    def _stop_watchdog(self, timeout=3.0):
+        """Retire the workers and *wait* for them to actually stop.
+
+        Bumping the generation is what they poll — once per frame, so a worker
+        returns within one measurement. The waiting is the point: a daemon
+        thread still inside OpenCV when the interpreter finalizes gets killed
+        mid-call, and on Linux that unwind runs through C++ frames and aborts
+        the process with "terminate called without an active exception". The
+        review is already saved by then, but the non-zero exit stops `make
+        all` before P5. macOS tears daemon threads down differently and never
+        showed it.
+        """
+        self._watch_gen += 1
+        deadline = time.monotonic() + timeout
+        for t in self._watch_threads:
+            t.join(max(0.0, deadline - time.monotonic()))
+        self._watch_threads = []
 
     def _watchdog_worker(self, gen, kfs, from_idx):
         """Track every frame's box against the boundary; score the residual.
@@ -2095,6 +2131,7 @@ def main():
     app = ReviewApp(root, args.output_dir, args.video, mode=args.mode)
     bring_to_front(root)
     root.mainloop()
+    app.close()   # idempotent: also covers a mainloop exit that skipped the handler
 
 
 if __name__ == "__main__":
