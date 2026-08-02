@@ -1,8 +1,14 @@
+# ScanStudio pipeline (P0–P9). This is everything `make install` needs.
+#
 # NOTE: The review GUIs (P4/P7) also require tkinter, a system package that is
 # NOT pip-installable. `make install` handles it (macOS: Homebrew
 # python-tk@<ver>; Debian/Ubuntu: apt install python3-tk).
+#
+# The legacy/experimental scripts at the repo root (ocr.py, yolo.py,
+# pageselection.py, the streamlit apps) need a far heavier set — torch and
+# friends, several GB — and none of the pipeline imports them. They live in
+# requirements-legacy.txt: `make install-legacy`.
 
-# Pipeline (P1–P9)
 numpy
 scipy
 matplotlib
@@ -10,12 +16,3 @@ opencv-python
 scikit-image
 Pillow
 reportlab
-
-# Legacy / experimental scripts
-flordb>=3.4.12
-torch
-python-doctr[torch]
-git+https://github.com/facebookresearch/segment-anything.git
-marker-pdf
-easyocr
-streamlit

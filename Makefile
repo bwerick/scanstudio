@@ -7,7 +7,7 @@
 # Usage (batch):
 #   make all VIDEO=recordings/mybook.mp4
 
-ifeq ($(filter install help live clean tkinter probe-camera,$(MAKECMDGOALS)),)
+ifeq ($(filter install install-legacy help live clean tkinter probe-camera,$(MAKECMDGOALS)),)
 ifeq ($(strip $(VIDEO)),)
 $(error VIDEO is required. Usage: make all VIDEO=recordings/mybook.mp4)
 endif
@@ -30,7 +30,7 @@ endif
 # Fail early with a clear message if the interpreter is missing, instead of a
 # cryptic "No such file or directory" from every recipe. Skipped for targets
 # that don't need Python (help, clean) and for install (which bootstraps it).
-ifeq ($(filter install help clean,$(MAKECMDGOALS)),)
+ifeq ($(filter install install-legacy help clean,$(MAKECMDGOALS)),)
 ifeq ($(shell command -v $(PYTHON) >/dev/null 2>&1 && echo ok),)
 $(error Python interpreter '$(PYTHON)' not found. Run 'make install' to create the venv, or override PYTHON=python3)
 endif
@@ -64,7 +64,7 @@ TURN          ?= 5.0
 SETTLE_TIME   ?= 0.3
 PREVIEW_HEIGHT ?= 720
 
-.PHONY: all bw live finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install tkinter probe-camera help
+.PHONY: all bw live finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install install-legacy tkinter probe-camera help
 
 help:
 	@echo "ScanStudio Pipeline"
@@ -89,6 +89,9 @@ help:
 	@echo "  pdf-bw        P9: Build B&W PDF"
 	@echo ""
 	@echo "  clean         Delete output/<NAME>/ (VIDEO= or NAME=; keeps recording)"
+	@echo ""
+	@echo "  install         Pipeline dependencies (requirements.txt)"
+	@echo "  install-legacy  Torch etc. for the root legacy scripts (several GB)"
 	@echo ""
 	@echo "  SAFETY_MARGIN=$(SAFETY_MARGIN)  BLOCK_SIZE=$(BLOCK_SIZE)  BW_OFFSET=$(BW_OFFSET)"
 	@echo "  BW_METHOD=$(BW_METHOD) (sauvola|adaptive)  BW_UPSCALE=$(BW_UPSCALE)  BW_K=$(BW_K) (higher=thinner)"
@@ -171,6 +174,12 @@ install: $(VENV) tkinter
 			echo "  sudo apt-get install -y libgl1 libglib2.0-0"; \
 		exit 1; \
 	}
+
+# Torch and friends for the legacy scripts at the repo root — several GB, and
+# nothing in P0-P9 imports them, so this is deliberately separate from
+# `install` rather than part of it.
+install-legacy: $(VENV)
+	$(PYTHON) -m pip install -r requirements-legacy.txt
 
 # Create the project venv on demand with the system python3. Only used when
 # PYTHON is the default .venv/bin/python (see VENV above); no-op if it exists.

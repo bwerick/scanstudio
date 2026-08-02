@@ -1,0 +1,19 @@
+# Legacy / experimental scripts at the repo root. NOT needed for the P0–P9
+# pipeline — install only if you're running these:
+#
+#   make install-legacy
+#
+# Heavy: torch dominates (~2.5 GB on Linux, where pip resolves the CUDA build
+# by default; pass --index-url https://download.pytorch.org/whl/cpu to pip for
+# the CPU-only wheel). segment-anything installs from a git URL, so git must be
+# on PATH. Each script picks its device itself: MPS on Apple Silicon, CUDA on
+# Linux, CPU otherwise.
+
+flordb>=3.4.12    # edge_detection, frameextraction, keyframe_extraction, batch_image_cropper, streamlit_*
+torch             # ocr, yolo, pageselection
+python-doctr[torch]   # ocr.py, doctr mode
+easyocr               # ocr.py, easyocr mode
+git+https://github.com/facebookresearch/segment-anything.git   # pageselection.py
+streamlit         # streamlit_crop_batch.py, streamlit_keyframes.py
+streamlit-cropper # streamlit_crop_batch.py (imports streamlit_cropper)
+marker-pdf        # kept from the original set; no script imports it today

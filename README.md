@@ -95,9 +95,22 @@ works without recreating `.venv`.
 make install
 ```
 
-This installs all packages from `requirements.txt`, then verifies tkinter and
-OpenCV actually import — the two things that fail for platform reasons rather
-than pip reasons.
+This installs the pipeline's dependencies from `requirements.txt`, then verifies
+tkinter and OpenCV actually import — the two things that fail for platform
+reasons rather than pip reasons.
+
+The torch-based legacy scripts at the repo root (`ocr.py`, `yolo.py`,
+`pageselection.py`, the streamlit apps) are **not** part of that: their
+dependencies are several GB, and no pipeline phase imports them. Install them
+only if you're running those scripts:
+
+```bash
+make install-legacy
+```
+
+On Linux, pip resolves torch to the CUDA build by default; for the much smaller
+CPU-only wheel, install it first with
+`pip install torch --index-url https://download.pytorch.org/whl/cpu`.
 
 ## Directory Structure
 
@@ -140,7 +153,8 @@ Most targets require `VIDEO=path/to/file.mp4`. The exception is `make live`, whi
 | `make pdf-bw VIDEO=...` | P9: Build B&W PDF |
 | `make clean VIDEO=...` | Delete all outputs for this video |
 | `make probe-camera` | List camera indices and which one delivers 4K |
-| `make install` | Install Python dependencies |
+| `make install` | Install the pipeline's Python dependencies |
+| `make install-legacy` | Install torch etc. for the root legacy scripts (several GB) |
 | `make help` | Show all targets and parameters |
 
 ## Pipeline Details
