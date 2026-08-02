@@ -1,9 +1,21 @@
 import cv2
+import sys
 import time
 import math
 from pathlib import Path
 import numpy as np
 from collections import deque
+
+# Capture backend: macOS reaches a webcam's high-res modes only through
+# AVFoundation, Linux through V4L2. (This is the standalone copy of
+# scripts/record_book.py, which gets the same pick from scripts/utils.py.)
+CAMERA_BACKEND = (
+    cv2.CAP_AVFOUNDATION
+    if sys.platform == "darwin"
+    else cv2.CAP_V4L2
+    if sys.platform.startswith("linux")
+    else cv2.CAP_ANY
+)
 
 # ---------------------------
 # Lightweight vision helpers
@@ -255,7 +267,8 @@ def post_recording_analysis(video_path: str):
 # ---------------------------
 
 
-def open_best_camera(backend, want_w, want_h, fps, max_scan=5):
+def open_best_camera(backend, want_w, want_h, fps,
+                     max_scan=10 if sys.platform.startswith("linux") else 5):
     """Open the camera that best delivers ``want_w`` x ``want_h``.
 
     USB camera indices shuffle on reconnect, so rather than trust a fixed index
@@ -268,6 +281,10 @@ def open_best_camera(backend, want_w, want_h, fps, max_scan=5):
         cap = cv2.VideoCapture(idx, backend)
         if not cap.isOpened():
             continue
+        if backend == cv2.CAP_V4L2:
+            # Most UVC cameras offer 4K only as MJPG; V4L2 defaults to raw
+            # YUYV, which caps out far lower. Format before resolution.
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(want_w))
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(want_h))
         cap.set(cv2.CAP_PROP_FPS, float(fps))
@@ -294,7 +311,7 @@ def open_best_camera(backend, want_w, want_h, fps, max_scan=5):
 
 def main():
     # Camera + recording defaults
-    backend = cv2.CAP_AVFOUNDATION
+    backend = CAMERA_BACKEND
 
     req_w, req_h = 3840, 2160
     req_fps = 30

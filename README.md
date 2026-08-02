@@ -50,23 +50,44 @@ Two modes are supported via `MODE=`:
 
 ## System Requirements
 
-**macOS only.** The interactive review GUIs (P4, P7) use the macOS Command key (`⌘S` to save) and are not tested on other platforms.
+**macOS and Linux.** The pipeline is pure Python/OpenCV; the three things that
+genuinely differ between the two — the camera backend, the save key, and the
+capture chime — are resolved at runtime in `scripts/utils.py`, so the same
+commands work on both. The save accelerator follows the platform: **`⌘S` on
+macOS, `Ctrl+S` on Linux** (every other key is the same).
 
-- **macOS 13 Ventura or later** recommended
 - **Python 3.10+** — the pipeline uses union type syntax (`str | None`) introduced in 3.10
+- **macOS 13 Ventura or later**, or a **Linux desktop with X11/Wayland** — P4 and P7 open GUI windows, and P0 opens a live preview, so a headless box can only run the automated phases (P1–P3, P5, P6, P8, P9)
 - **RAM** — 16 GB recommended; 8 GB workable for shorter or lower-resolution videos. P3 holds full-resolution keyframes in memory during extraction.
 - **Storage** — plan for 10+ GB per book at 4K (the default capture resolution; the raw recording dominates), less at 1080p, plus one image per page in `images/` and `pages/`
-- **Apple Silicon (M1 or later)** — not required for the core pipeline, but significantly faster for the torch-based legacy scripts (`featurize.py`, `ocr.py`, `yolo.py`)
+- **GPU** — not required for the core pipeline, but the torch-based legacy scripts (`featurize.py`, `ocr.py`, `yolo.py`) are significantly faster on Apple Silicon (MPS) or a CUDA card on Linux; they fall back to CPU otherwise
 
-**tkinter note:** P4 and P7 use tkinter for their GUIs. If you installed Python via Homebrew and tkinter is missing, run:
+**tkinter note:** P4 and P7 use tkinter for their GUIs. It is a system package, not
+pip-installable, so `make install` checks for it and prints the right command for
+your platform if it's missing:
+
 ```bash
-brew install python-tk
+brew install python-tk            # macOS (Homebrew Python)
+sudo apt-get install python3-tk   # Debian / Ubuntu
+sudo dnf install python3-tkinter  # Fedora / RHEL
+sudo pacman -S tk                 # Arch
 ```
+
+A venv reads tkinter from the base Python's stdlib, so installing it afterwards
+works without recreating `.venv`.
 
 ## Prerequisites
 
 - Python 3.10+
 - No external command-line tools required (pure Python pipeline)
+- **Linux only:** on a minimal image (server, container, WSL) the OpenCV wheel
+  also needs `libgl1` and `libglib2.0-0`, and `python3-venv` must be present for
+  `make install` to create `.venv`:
+  ```bash
+  sudo apt-get install -y python3-venv python3-tk libgl1 libglib2.0-0
+  ```
+  Your user must be in the `video` group to open a webcam for `make live`
+  (`sudo usermod -aG video $USER`, then log out and back in).
 
 ## Installation
 
@@ -74,7 +95,9 @@ brew install python-tk
 make install
 ```
 
-This installs all packages from `requirements.txt`.
+This installs all packages from `requirements.txt`, then verifies tkinter and
+OpenCV actually import — the two things that fail for platform reasons rather
+than pip reasons.
 
 ## Directory Structure
 
@@ -149,7 +172,9 @@ make finish VIDEO=recordings/mybook.mp4
 
 **Tuning:** webcam motion magnitudes differ from pre-recorded clips, so you may need to adjust the thresholds (see Configuration). Watch the motion bar relative to the threshold ticks: if turns aren't detected, lower `TURN`; if it captures while you're still moving, raise `SETTLE` or `SETTLE_TIME`.
 
-> **Camera selection:** `make live` requests 4K and `CAMERA=auto` (the default) picks whichever connected camera actually delivers it — USB indices shuffle on reconnect, so run `make probe-camera` to see what each reports, or set `CAMERA=<index>` to force one. Mount the camera on a fixed stand so framing stays stable across the session.
+> **Camera selection:** `make live` requests 4K and `CAMERA=auto` (the default) picks whichever connected camera actually delivers it — indices shuffle on reconnect (and on Linux one physical camera usually claims several `/dev/video*` nodes, only one of which captures), so run `make probe-camera` to see what each reports, or set `CAMERA=<index>` to force one. `CAMERA=<n>` is `/dev/video<n>` on Linux. Mount the camera on a fixed stand so framing stays stable across the session.
+>
+> The capture backend is chosen per platform: AVFoundation on macOS, V4L2 on Linux — the only ones that expose a webcam's high-res modes. On Linux the format is set to MJPG before the resolution, since most UVC cameras offer 4K only as MJPG and default to raw YUYV.
 
 ### P1 — Motion Signal
 
@@ -199,7 +224,7 @@ Tkinter GUI for reviewing and correcting the keyframe selection. This phase is r
 | `C` | Toggle center line |
 | `E` | Jump to the next watchdog-flagged frame (double mode; cycles) |
 | `G` | Adjust geometry: a draggable crop box over the raw frame — drag a corner/edge to resize, `[` `]` tilt, `⇧`+arrows resize. **double**: drag anywhere inside the box to place the gutter line (`←`/`→` nudge it), `⇧`+drag inside to move the box (`↑`/`↓` too). **single**: drag inside to move the box. `Enter` save, `Esc` cancel, `Backspace` reset |
-| `⌘S` | Save |
+| `⌘S` / `Ctrl+S` | Save |
 
 `G` adapts to `MODE=` (the `review` target passes it through automatically):
 
@@ -240,7 +265,7 @@ Tkinter GUI for dropping bad pages, nudging a page's geometry, and marking where
 | `X` | Toggle drop page |
 | `F` | Toggle **First Page** — this page starts a new document; the note box then names it |
 | `G` | Geometry: arrows translate the page inside its frame, `⇧`+arrows go 5× further, `[` `]` tilt ±0.25°, `{` `}` tilt ±1.25°, `Enter` keep, `Esc` cancel, `Backspace` reset to as-scanned |
-| `⌘S` | Save |
+| `⌘S` / `Ctrl+S` | Save |
 
 **Geometry is non-destructive.** The first time a page is nudged, its untouched JPEG is stashed in `pages_orig/`; every Save re-renders `pages/<file>` from that pristine copy (rotation about the centre, white fill, same dimensions). Adjusting a page twice therefore costs one re-encode rather than two, `Backspace` restores exactly what P6 produced, and P8/P9 read `pages/` as always. P6 clears `pages_orig/` when it regenerates `pages/`, since those copies would no longer be the right baseline.
 
@@ -306,8 +331,8 @@ make all VIDEO=recordings/mybook.mp4 MODE=single SAFETY_MARGIN=0.01
 # 1. Run the full automated + interactive pipeline
 make all VIDEO=recordings/african_founders.mp4
 
-# At P4: review keyframes in the GUI, label bad frames, insert missing ones, save with ⌘S
-# At P7: drop bad pages, nudge geometry, mark where each document starts, save with ⌘S
+# At P4: review keyframes in the GUI, label bad frames, insert missing ones, save with ⌘S (Ctrl+S on Linux)
+# At P7: drop bad pages, nudge geometry, mark where each document starts, save with ⌘S (Ctrl+S on Linux)
 
 # 2. Optionally produce a B&W version
 make bw VIDEO=recordings/african_founders.mp4
@@ -326,6 +351,12 @@ make bw VIDEO=recordings/african_founders.mp4
 **Binarization looks wrong** — Try `BW_METHOD=adaptive`, or tune `BW_K` (Sauvola stroke weight; higher = thinner), `BLOCK_SIZE` (larger = coarser regions), and `BW_OFFSET` (adaptive only).
 
 **PDF page order is wrong** — Page ordering follows the `pages.json` metadata. Check `json/keyframes.json` for frame numbering issues.
+
+**`ImportError: libGL.so.1` (Linux)** — The OpenCV wheel links against system libraries a minimal image doesn't ship: `sudo apt-get install -y libgl1 libglib2.0-0`.
+
+**No camera found on Linux** — Check the device exists (`ls /dev/video*`) and that you can read it (`make probe-camera`). "Permission denied" means your user isn't in the `video` group: `sudo usermod -aG video $USER`, then log out and back in. If a camera opens but never reaches 4K, run `v4l2-ctl --list-formats-ext -d /dev/videoN` (from `v4l-utils`) to see which modes it really offers — many webcams expose 4K only under MJPG, which `make live` already requests.
+
+**`make live` is silent on capture (Linux)** — The chime falls back to the terminal bell when no sound player is found. Install one of `pulseaudio-utils` (`paplay`), `alsa-utils` (`aplay`), or `libcanberra-gtk3-module` (`canberra-gtk-play`); the sound theme comes from `sound-theme-freedesktop`.
 
 ## License
 

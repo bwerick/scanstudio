@@ -17,12 +17,163 @@ Directory structure per video:
 
 import json
 import re
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+
+# ── Platform portability ─────────────────────────────────────
+#
+# The pipeline itself is plain Python/OpenCV and runs anywhere; only three
+# things actually differ between macOS and Linux — which capture backend
+# reaches the camera's high-res modes, which key means "save", and how a
+# machine plays a short sound. Each is resolved once here so the phase
+# scripts stay free of platform branches.
+
+IS_MAC = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
+
+# How many camera indices a scan walks. On Linux a single physical camera
+# usually claims two /dev/video nodes (capture + metadata), so the same
+# number of indices covers half as many cameras.
+CAMERA_SCAN_RANGE = 10 if IS_LINUX else 5
+
+
+def camera_backend():
+    """OpenCV capture backend that exposes a webcam's full mode list.
+
+    macOS reaches a camera's high-res modes only through AVFoundation — the
+    default backend silently tops out at 1080p on some cameras. On Linux the
+    equivalent is V4L2, which is also the backend that honours a FOURCC
+    request (see ``prepare_capture``). Anything else gets OpenCV's own pick.
+    """
+    if IS_MAC:
+        return cv2.CAP_AVFOUNDATION
+    if IS_LINUX:
+        return cv2.CAP_V4L2
+    return cv2.CAP_ANY
+
+
+def backend_name(backend) -> str:
+    """Human-readable name for an OpenCV capture backend constant."""
+    return {cv2.CAP_AVFOUNDATION: "AVFOUNDATION", cv2.CAP_V4L2: "V4L2",
+            cv2.CAP_ANY: "DEFAULT"}.get(backend, str(backend))
+
+
+def prepare_capture(cap, want_w: int, want_h: int, fps: float | None = None):
+    """Ask an open capture for ``want_w``x``want_h`` (and optionally fps).
+
+    Order matters on V4L2: most UVC cameras offer 4K only as MJPG and default
+    to raw YUYV, which caps out far lower and at a few fps, so the format is
+    requested *before* the resolution. AVFoundation picks the format itself
+    and is left alone. The camera negotiates to its nearest supported mode
+    either way, so callers must read back what they actually got.
+    """
+    if not IS_MAC:
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(want_w))
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(want_h))
+    if fps is not None:
+        cap.set(cv2.CAP_PROP_FPS, float(fps))
+
+
+def camera_label(idx: int) -> str:
+    """How to name camera index ``idx`` in operator-facing output."""
+    return f"index {idx} (/dev/video{idx})" if IS_LINUX else f"index {idx}"
+
+
+# Save accelerator: ⌘S is the macOS convention, Ctrl+S everywhere else.
+SAVE_ACCEL = "<Command-s>" if IS_MAC else "<Control-s>"
+SAVE_LABEL = "⌘S" if IS_MAC else "Ctrl+S"
+
+
+def bind_save(root, callback):
+    """Bind the platform's save accelerator to ``callback``.
+
+    Ctrl+S is bound on macOS too — it costs nothing and spares anyone whose
+    muscle memory came from the other platform.
+    """
+    for accel in {SAVE_ACCEL, "<Control-s>"}:
+        root.bind(accel, lambda e: callback())
+
+
+_MONO_FAMILY = None
+# In preference order; the first one the system actually has wins. Menlo is
+# macOS, the next three ship with common Linux desktops.
+_MONO_CANDIDATES = ("Menlo", "DejaVu Sans Mono", "Liberation Mono",
+                    "Ubuntu Mono", "Noto Sans Mono", "Consolas", "Courier New")
+
+
+def mono(size: int, *style: str):
+    """A Tk font tuple in the best monospace family this system has.
+
+    The review GUIs align their labels by character width, and Tk silently
+    substitutes a *proportional* default for a family the system doesn't
+    have — a hard-coded "Menlo" reads fine on macOS and ragged on Linux.
+    Needs an existing Tk root, so call it from UI construction rather than
+    at import time.
+    """
+    global _MONO_FAMILY
+    if _MONO_FAMILY is None:
+        from tkinter import font as tkfont
+
+        have = {f.lower() for f in tkfont.families()}
+        _MONO_FAMILY = next(
+            (f for f in _MONO_CANDIDATES if f.lower() in have),
+            "Courier",   # Tk resolves this to a fixed font on every platform
+        )
+    return (_MONO_FAMILY, size, *style)
+
+
+# Short chime for a capture, as (executable, sound file) pairs in preference
+# order. macOS ships afplay and a stock alert; Linux desktops ship one of the
+# PulseAudio/ALSA players plus the freedesktop sound theme.
+_SOUND_CANDIDATES = (
+    [("afplay", "/System/Library/Sounds/Glass.aiff")]
+    if IS_MAC
+    else [
+        ("paplay", "/usr/share/sounds/freedesktop/stereo/complete.oga"),
+        ("paplay", "/usr/share/sounds/freedesktop/stereo/bell.oga"),
+        ("pw-play", "/usr/share/sounds/freedesktop/stereo/complete.oga"),
+        ("aplay", "/usr/share/sounds/alsa/Front_Center.wav"),
+    ]
+)
+
+
+def sound_player():
+    """Resolve a zero-argument callable that plays a short capture chime.
+
+    Resolved once, at startup: the player and the file it can play differ per
+    platform, and a machine with neither should fall back to the terminal
+    bell rather than fork a doomed process on every capture.
+    """
+    for exe, snd in _SOUND_CANDIDATES:
+        if shutil.which(exe) and Path(snd).exists():
+            cmd = [exe, snd]
+
+            def play(cmd=cmd):
+                subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+
+            return play
+
+    if shutil.which("canberra-gtk-play"):   # theme sound, no file path needed
+        def play_theme():
+            subprocess.Popen(["canberra-gtk-play", "-i", "complete"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        return play_theme
+
+    def bell():
+        sys.stdout.write("\a")
+        sys.stdout.flush()
+
+    return bell
 
 
 def log(msg: str):
@@ -80,7 +231,8 @@ def ensure_dir(path: Path) -> Path:
 def bring_to_front(root):
     """Force a Tk window to the foreground and grab keyboard focus.
 
-    On macOS, Tk windows open behind the active app and never steal focus, so a
+    On macOS, Tk windows open behind the active app and never steal focus; many
+    Linux window managers apply the same focus-stealing prevention. Either way a
     review GUI launched mid-pipeline (e.g. P7, which opens only after the long
     crop/split phase when attention has wandered to another window) can come up
     hidden and be dismissed unseen. Lifting, briefly pinning ``-topmost``, then

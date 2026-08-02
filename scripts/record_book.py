@@ -5,6 +5,8 @@ from pathlib import Path
 import numpy as np
 from collections import deque
 
+from utils import CAMERA_SCAN_RANGE, camera_backend, prepare_capture
+
 
 # ---------------------------
 # Lightweight vision helpers
@@ -240,7 +242,7 @@ def post_recording_analysis(video_path: str):
 # ---------------------------
 
 
-def open_best_camera(backend, want_w, want_h, fps, max_scan=5):
+def open_best_camera(backend, want_w, want_h, fps, max_scan=CAMERA_SCAN_RANGE):
     """Open the camera that best delivers ``want_w`` x ``want_h``.
 
     USB camera indices shuffle on reconnect, so rather than trust a fixed index
@@ -253,9 +255,7 @@ def open_best_camera(backend, want_w, want_h, fps, max_scan=5):
         cap = cv2.VideoCapture(idx, backend)
         if not cap.isOpened():
             continue
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(want_w))
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(want_h))
-        cap.set(cv2.CAP_PROP_FPS, float(fps))
+        prepare_capture(cap, want_w, want_h, fps)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         ok, frame = cap.read()
         if not ok or frame is None:
@@ -279,7 +279,7 @@ def open_best_camera(backend, want_w, want_h, fps, max_scan=5):
 
 def main():
     # Camera + recording defaults
-    backend = cv2.CAP_AVFOUNDATION
+    backend = camera_backend()
 
     req_w, req_h = 3840, 2160
     req_fps = 30

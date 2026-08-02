@@ -163,24 +163,51 @@ probe-camera:
 
 install: $(VENV) tkinter
 	$(PYTHON) -m pip install -r requirements.txt
+	@$(PYTHON) -c "import cv2" 2>/dev/null && echo "opencv OK" || { \
+		echo "opencv installed but won't import."; \
+		command -v apt-get >/dev/null 2>&1 && \
+			echo "Minimal Linux images lack the libraries its wheel links against:"; \
+		command -v apt-get >/dev/null 2>&1 && \
+			echo "  sudo apt-get install -y libgl1 libglib2.0-0"; \
+		exit 1; \
+	}
 
 # Create the project venv on demand with the system python3. Only used when
 # PYTHON is the default .venv/bin/python (see VENV above); no-op if it exists.
+# On Debian/Ubuntu the venv module is a separate package, so a bare failure
+# here is usually a missing python3-venv rather than a broken Python.
 .venv/bin/python:
 	@echo "Creating .venv with $$(command -v python3)..."
-	python3 -m venv .venv
+	@python3 -m venv .venv || { \
+		echo "Could not create the venv."; \
+		command -v apt-get >/dev/null 2>&1 && \
+			echo "On Debian/Ubuntu: sudo apt-get install -y python3-venv"; \
+		exit 1; \
+	}
 
 # tkinter is a system package (not pip-installable). The review GUIs (P4/P7)
-# need it. On macOS install the matching Homebrew package for the active Python.
+# need it. macOS: install the matching Homebrew package for the active Python.
+# Linux: print the right package for the distro's package manager — installing
+# it needs root, which is the operator's call, not the Makefile's. A venv reads
+# tkinter from the base Python's stdlib, so it works right after without
+# recreating .venv.
 tkinter:
 	@$(PYTHON) -c "import tkinter" 2>/dev/null && echo "tkinter OK" || { \
 		echo "tkinter missing."; \
+		ver=$$($(PYTHON) -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"); \
 		if [ "$$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then \
-			ver=$$($(PYTHON) -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"); \
 			echo "Installing python-tk@$$ver via Homebrew..."; \
 			brew install python-tk@$$ver; \
+		elif command -v apt-get >/dev/null 2>&1; then \
+			echo "Install it with:  sudo apt-get install -y python3-tk"; exit 1; \
+		elif command -v dnf >/dev/null 2>&1; then \
+			echo "Install it with:  sudo dnf install -y python3-tkinter"; exit 1; \
+		elif command -v pacman >/dev/null 2>&1; then \
+			echo "Install it with:  sudo pacman -S --needed tk"; exit 1; \
+		elif command -v zypper >/dev/null 2>&1; then \
+			echo "Install it with:  sudo zypper install -y python3-tk"; exit 1; \
 		else \
-			echo "Install Tk for your Python, e.g. apt install python3-tk (Debian/Ubuntu)."; \
+			echo "Install the Tk bindings for Python $$ver with your package manager."; \
 			exit 1; \
 		fi; \
 	}

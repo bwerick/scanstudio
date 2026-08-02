@@ -28,7 +28,6 @@ Keys (in the live window):
 import argparse
 import json
 import queue
-import subprocess
 import sys
 import threading
 import time
@@ -38,7 +37,15 @@ import cv2
 import numpy as np
 from scipy.ndimage import uniform_filter1d
 
-from utils import log, ProjectPaths
+from utils import (
+    log,
+    ProjectPaths,
+    CAMERA_SCAN_RANGE,
+    camera_backend,
+    camera_label,
+    prepare_capture,
+    sound_player,
+)
 
 
 def laplacian_sharpness(gray):
@@ -149,15 +156,14 @@ def open_camera(requested, want_w, want_h, fps):
     """Open the capture camera at ``want_w``x``want_h``; return (cap, w, h).
 
     USB camera indices shuffle as devices connect/disconnect (Continuity Camera,
-    the built-in FaceTime cam, external webcams), so a fixed index is unreliable.
+    the built-in FaceTime cam, external webcams; on Linux, one physical camera
+    often claims several /dev/video nodes), so a fixed index is unreliable.
     ``requested="auto"`` scans indices and takes the first that actually delivers
     the requested resolution, falling back to the highest-resolution camera
     found. Pass an integer to force a specific index. Returns ``(None, 0, 0)`` if
     nothing opens.
     """
-    # macOS exposes a webcam's high-res modes only through AVFoundation; the
-    # default backend silently tops out at 1080p on some cameras.
-    backend = cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_ANY
+    backend = camera_backend()
 
     def try_open(idx):
         cap = cv2.VideoCapture(idx, backend)
@@ -165,9 +171,7 @@ def open_camera(requested, want_w, want_h, fps):
             return None
         # Request the capture mode *before* the first read; a UVC camera
         # negotiates to its nearest supported mode, so read back what we got.
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(want_w))
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(want_h))
-        cap.set(cv2.CAP_PROP_FPS, float(fps))
+        prepare_capture(cap, want_w, want_h, fps)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         ok, frame = cap.read()
         if not ok or frame is None:
@@ -179,7 +183,7 @@ def open_camera(requested, want_w, want_h, fps):
         return try_open(int(requested)) or (None, 0, 0)
 
     best = None  # (area, cap, w, h, idx)
-    for idx in range(5):
+    for idx in range(CAMERA_SCAN_RANGE):
         opened = try_open(idx)
         if opened is None:
             continue
@@ -187,7 +191,7 @@ def open_camera(requested, want_w, want_h, fps):
         if w >= want_w and h >= want_h:   # meets the request — take it, stop scanning
             if best is not None:
                 best[1].release()
-            log(f"  Auto-selected camera {idx}: {w}x{h}")
+            log(f"  Auto-selected camera {camera_label(idx)}: {w}x{h}")
             return cap, w, h
         if best is None or w * h > best[0]:
             if best is not None:
@@ -197,7 +201,7 @@ def open_camera(requested, want_w, want_h, fps):
             cap.release()
     if best is None:
         return None, 0, 0
-    log(f"  Auto-selected camera {best[4]}: {best[2]}x{best[3]} "
+    log(f"  Auto-selected camera {camera_label(best[4])}: {best[2]}x{best[3]} "
         f"(none met {want_w}x{want_h})")
     return best[1], best[2], best[3]
 
@@ -301,12 +305,11 @@ def main():
     muted = False
     flash_text, flash_until = "", 0.0
 
+    play_chime = sound_player()   # resolved once; platform-dependent
+
     def play_ding():
         if not muted:
-            subprocess.Popen(
-                ["afplay", "/System/Library/Sounds/Glass.aiff"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            play_chime()
 
     def commit_capture(reason):
         nonlocal flash_text, flash_until

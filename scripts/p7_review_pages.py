@@ -9,7 +9,7 @@ Keys: →/D next  ←/A prev
       g   Geometry — nudge the page image inside its own frame:
           arrows translate, ⇧+arrows go 5× further, [ / ] tilt ±0.25°,
           { / } tilt ±1.25°, ⏎ keep, ⎋ cancel, ⌫ reset to as-scanned.
-      ⌘S  save
+      ⌘S / Ctrl+S  save (⌘S on macOS, Ctrl+S elsewhere)
 
 Typing in the note box takes the keyboard: X/F/G and the arrows deliberately
 do nothing there, or they would fire mid-word. ⎋ or ⇥ hands the keys back, as
@@ -38,6 +38,9 @@ from utils import (
     ProjectPaths,
     ensure_dir,
     bring_to_front,
+    bind_save,
+    mono,
+    SAVE_LABEL,
     segment_documents,
     slugify,
 )
@@ -94,7 +97,8 @@ class PageReviewApp:
 
     @staticmethod
     def _button(parent, command, **kw):
-        # macOS Aqua tk.Button ignores bg/fg, so use a clickable Label instead.
+        # macOS Aqua tk.Button ignores bg/fg (X11 Tk honours it), so use a clickable
+        # Label instead — one styling path that looks the same on both.
         kw.setdefault("cursor", "hand2")
         lbl = tk.Label(parent, **kw)
         lbl.bind("<Button-1>", lambda e: command())
@@ -106,19 +110,19 @@ class PageReviewApp:
         top.pack(fill="x")
         top.pack_propagate(False)
         tk.Label(
-            top, text="Page Review", font=("Menlo", 13, "bold"), bg="#111", fg=fg
+            top, text="Page Review", font=mono(13, "bold"), bg="#111", fg=fg
         ).pack(side="left", padx=12)
-        self.lbl_counter = tk.Label(top, text="", font=("Menlo", 11), bg="#111", fg=dim)
+        self.lbl_counter = tk.Label(top, text="", font=mono(11), bg="#111", fg=dim)
         self.lbl_counter.pack(side="left", padx=8)
         self.lbl_docs = tk.Label(
-            top, text="", font=("Menlo", 10), bg="#111", fg="#a855f7"
+            top, text="", font=mono(10), bg="#111", fg="#a855f7"
         )
         self.lbl_docs.pack(side="left", padx=8)
         self._button(
             top,
             self._save,
-            text="Save (⌘S)",
-            font=("Menlo", 10),
+            text=f"Save ({SAVE_LABEL})",
+            font=mono(10),
             bg="#3b82f6",
             fg="white",
             relief="flat",
@@ -127,7 +131,7 @@ class PageReviewApp:
         ).pack(side="right", padx=8, pady=6)
         main = tk.Frame(self.root, bg=bg)
         main.pack(fill="both", expand=True)
-        self.lbl_info = tk.Label(main, text="", font=("Menlo", 11), bg=bg, fg=dim)
+        self.lbl_info = tk.Label(main, text="", font=mono(11), bg=bg, fg=dim)
         self.lbl_info.pack(pady=(8, 4))
         self.canvas = tk.Canvas(main, bg="#111", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True, padx=12, pady=4)
@@ -140,7 +144,7 @@ class PageReviewApp:
             nav,
             self._prev,
             text="← Prev",
-            font=("Menlo", 11),
+            font=mono(11),
             bg="#1e293b",
             fg=fg,
             relief="flat",
@@ -151,7 +155,7 @@ class PageReviewApp:
             nav,
             self._next,
             text="Next →",
-            font=("Menlo", 11),
+            font=mono(11),
             bg="#1e293b",
             fg=fg,
             relief="flat",
@@ -162,7 +166,7 @@ class PageReviewApp:
             nav,
             self._toggle_doc_start,
             text="F First Page",
-            font=("Menlo", 11),
+            font=mono(11),
             bg="#1e293b",
             fg="#a855f7",
             relief="flat",
@@ -173,7 +177,7 @@ class PageReviewApp:
             nav,
             self._toggle_geom,
             text="G Geometry",
-            font=("Menlo", 11),
+            font=mono(11),
             bg="#1e293b",
             fg="#22ff66",
             relief="flat",
@@ -181,11 +185,11 @@ class PageReviewApp:
             pady=4,
         ).pack(side="left", padx=4)
         # Doubles as the document title on a First Page (see _note_label).
-        self.lbl_note = tk.Label(main, text="", font=("Menlo", 9), bg=bg, fg=dim)
+        self.lbl_note = tk.Label(main, text="", font=mono(9), bg=bg, fg=dim)
         self.lbl_note.pack(anchor="w", padx=12)
         self.note_entry = tk.Text(
             main,
-            font=("Menlo", 10),
+            font=mono(10),
             bg="#111",
             fg=fg,
             insertbackground=fg,
@@ -221,7 +225,7 @@ class PageReviewApp:
         self.root.bind("<BackSpace>", lambda e: self._geom_reset())
         self.root.bind("<Return>", lambda e: self._geom_confirm())
         self.root.bind("<Escape>", lambda e: self._geom_cancel())
-        self.root.bind("<Command-s>", lambda e: self._save())
+        bind_save(self.root, self._save)
 
     def _in_note(self):
         return self.root.focus_get() == self.note_entry
@@ -457,7 +461,7 @@ class PageReviewApp:
                         "⏎ keep · ⎋ cancel · ⌫ reset"
                     ),
                     fill="#22ff66",
-                    font=("Menlo", 10),
+                    font=mono(10),
                 )
             elif not self._is_identity(g):
                 self.canvas.create_text(
@@ -466,7 +470,7 @@ class PageReviewApp:
                     anchor="n",
                     text=f"adjusted {g['rot']:+.2f}° — G to edit",
                     fill="#22ff66",
-                    font=("Menlo", 10),
+                    font=mono(10),
                 )
             if pn in self.drops:
                 self.canvas.create_rectangle(
@@ -477,12 +481,12 @@ class PageReviewApp:
                     24,
                     text="DROPPED — x to undo",
                     fill="#ef4444",
-                    font=("Menlo", 13, "bold"),
+                    font=mono(13, "bold"),
                 )
         except Exception as e:
             self.canvas.delete("all")
             self.canvas.create_text(
-                cw // 2, ch // 2, text=str(e), fill="#ef4444", font=("Menlo", 12)
+                cw // 2, ch // 2, text=str(e), fill="#ef4444", font=mono(12)
             )
         self._save_note()  # whatever is in the box belongs to the page it came from
         self._note_label(pn)

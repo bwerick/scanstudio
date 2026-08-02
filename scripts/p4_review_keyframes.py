@@ -22,7 +22,7 @@ Keys:
        its center, [ / ] tilt. The gutter is mouse-only: drag anywhere inside
        the box to place it (⇧+drag inside moves the box, corners/edges
        resize). Enter save + validate, Esc cancel, ⌫ reset.
-  ⌘S   Save
+  ⌘S / Ctrl+S   Save (⌘S on macOS, Ctrl+S elsewhere)
 
 In double mode the crop box *follows the book*. Every frame starts from the
 session's *consensus* crop box — voted once from a sample of frames — and a
@@ -91,6 +91,9 @@ from utils import (
     resolve_crop_quad,
     resolve_crop_anchor,
     bring_to_front,
+    bind_save,
+    mono,
+    SAVE_LABEL,
     WATCHDOG_ALERT_FRAC,
     TRACK_DEADBAND_FRAC,
 )
@@ -128,11 +131,11 @@ class VideoScrubber:
         top = tk.Frame(self.win, bg="#111")
         top.pack(fill="x")
         self.lbl_info = tk.Label(
-            top, text="", font=("Menlo", 12), bg="#111", fg="#e2e8f0"
+            top, text="", font=mono(12), bg="#111", fg="#e2e8f0"
         )
         self.lbl_info.pack(side="left", padx=12, pady=6)
         self.lbl_motion = tk.Label(
-            top, text="", font=("Menlo", 11), bg="#111", fg="#64748b"
+            top, text="", font=mono(11), bg="#111", fg="#64748b"
         )
         self.lbl_motion.pack(side="right", padx=12, pady=6)
 
@@ -144,7 +147,7 @@ class VideoScrubber:
         tk.Label(
             bot,
             text="←/→ ±1   ↑/↓ ±5   Shift+←/→ ±30   Enter=Grab   Esc=Cancel",
-            font=("Menlo", 10),
+            font=mono(10),
             bg="#0a0a0a",
             fg="#475569",
         ).pack()
@@ -153,7 +156,7 @@ class VideoScrubber:
         grab = tk.Label(
             bf,
             text="  ✓ GRAB  ",
-            font=("Menlo", 11, "bold"),
+            font=mono(11, "bold"),
             bg="#22c55e",
             fg="white",
             relief="flat",
@@ -166,7 +169,7 @@ class VideoScrubber:
         cancel = tk.Label(
             bf,
             text="Cancel",
-            font=("Menlo", 10),
+            font=mono(10),
             bg="#1e293b",
             fg="#94a3b8",
             relief="flat",
@@ -347,23 +350,23 @@ class ReviewApp:
         top.pack(fill="x")
         top.pack_propagate(False)
         tk.Label(
-            top, text="Review Keyframes", font=("Menlo", 13, "bold"), bg="#111", fg=fg
+            top, text="Review Keyframes", font=mono(13, "bold"), bg="#111", fg=fg
         ).pack(side="left", padx=12)
-        self.lbl_counter = tk.Label(top, text="", font=("Menlo", 11), bg="#111", fg=dim)
+        self.lbl_counter = tk.Label(top, text="", font=mono(11), bg="#111", fg=dim)
         self.lbl_counter.pack(side="left", padx=8)
         self.lbl_stats = tk.Label(
-            top, text="", font=("Menlo", 10), bg="#111", fg="#22c55e"
+            top, text="", font=mono(10), bg="#111", fg="#22c55e"
         )
         self.lbl_stats.pack(side="left", padx=8)
         # Watchdog status: scan progress, then the alert count E cycles through.
-        self.lbl_queue = tk.Label(top, text="", font=("Menlo", 10), bg="#111",
+        self.lbl_queue = tk.Label(top, text="", font=mono(10), bg="#111",
                                   fg="#f59e0b")
         self.lbl_queue.pack(side="left", padx=8)
         self._button(
             top,
             self._save,
-            text="Save (⌘S)",
-            font=("Menlo", 10),
+            text=f"Save ({SAVE_LABEL})",
+            font=mono(10),
             bg="#3b82f6",
             fg="white",
             relief="flat",
@@ -376,10 +379,10 @@ class ReviewApp:
 
         img_frame = tk.Frame(main, bg=bg)
         img_frame.pack(side="left", fill="both", expand=True)
-        self.lbl_info = tk.Label(img_frame, text="", font=("Menlo", 11), bg=bg, fg=dim)
+        self.lbl_info = tk.Label(img_frame, text="", font=mono(11), bg=bg, fg=dim)
         self.lbl_info.pack(pady=(8, 0))
         self.lbl_detail = tk.Label(
-            img_frame, text="", font=("Menlo", 10), bg=bg, fg=dim
+            img_frame, text="", font=mono(10), bg=bg, fg=dim
         )
         self.lbl_detail.pack(pady=(0, 4))
         self.canvas = tk.Canvas(img_frame, bg="#111", highlightthickness=0)
@@ -399,7 +402,7 @@ class ReviewApp:
             nav,
             self._go_prev,
             text="← Prev (A)",
-            font=("Menlo", 11),
+            font=mono(11),
             bg="#1e293b",
             fg=fg,
             relief="flat",
@@ -410,7 +413,7 @@ class ReviewApp:
             nav,
             self._go_next,
             text="Next (D) →",
-            font=("Menlo", 11),
+            font=mono(11),
             bg="#1e293b",
             fg=fg,
             relief="flat",
@@ -421,7 +424,7 @@ class ReviewApp:
         panel = tk.Frame(main, bg="#0f0f0f", width=230)
         panel.pack(side="right", fill="y")
         panel.pack_propagate(False)
-        tk.Label(panel, text="ACTION", font=("Menlo", 9), bg="#0f0f0f", fg=dim).pack(
+        tk.Label(panel, text="ACTION", font=mono(9), bg="#0f0f0f", fg=dim).pack(
             anchor="w", padx=12, pady=(12, 4)
         )
         self.action_buttons = {}
@@ -430,7 +433,7 @@ class ReviewApp:
                 panel,
                 lambda k=key: self._set_action(k),
                 text=f"  {cfg['key']}  {cfg['label']}",
-                font=("Menlo", 11),
+                font=mono(11),
                 anchor="w",
                 relief="flat",
                 padx=8,
@@ -446,7 +449,7 @@ class ReviewApp:
             panel,
             self._open_scrubber,
             text="  I   Insert Frame",
-            font=("Menlo", 11),
+            font=mono(11),
             anchor="w",
             relief="flat",
             padx=8,
@@ -456,7 +459,7 @@ class ReviewApp:
         ).pack(fill="x", padx=8, pady=2)
 
         self.lbl_action = tk.Label(
-            panel, text="", font=("Menlo", 10, "bold"), bg="#0f0f0f", fg=dim
+            panel, text="", font=mono(10, "bold"), bg="#0f0f0f", fg=dim
         )
         self.lbl_action.pack(anchor="w", padx=12, pady=(8, 4))
 
@@ -478,10 +481,10 @@ class ReviewApp:
                 "I Insert   C Center\n"
                 f"{split_hint}"
                 "←/A Prev   →/D Next\n"
-                "⌘S Save\n"
+                f"{SAVE_LABEL} Save\n"
                 "✓ = crop pinned as-is"
             ),
-            font=("Menlo", 9),
+            font=mono(9),
             bg="#0f0f0f",
             fg="#475569",
             justify="left",
@@ -489,7 +492,8 @@ class ReviewApp:
 
     @staticmethod
     def _button(parent, command, **kw):
-        # macOS Aqua tk.Button ignores bg/fg, so use a clickable Label instead.
+        # macOS Aqua tk.Button ignores bg/fg (X11 Tk honours it), so use a clickable
+        # Label instead — one styling path that looks the same on both.
         kw.setdefault("cursor", "hand2")
         lbl = tk.Label(parent, **kw)
         lbl.bind("<Button-1>", lambda e: command())
@@ -555,7 +559,7 @@ class ReviewApp:
         self.root.bind("<BackSpace>", lambda e: self._editor_reset())
         self.root.bind("<Return>", lambda e: self._editor_confirm())
         self.root.bind("<Escape>", lambda e: self._editor_cancel())
-        self.root.bind("<Command-s>", lambda e: self._save())
+        bind_save(self.root, self._save)
 
     def _editing(self):
         """True while either geometry editor (split or crop) is open."""
@@ -747,7 +751,7 @@ class ReviewApp:
                     self.canvas.create_text(
                         cw // 2, iy0 + dh - 14,
                         text=f"⚠ {detail} — press G to check",
-                        fill="#f59e0b", font=("Menlo", 11, "bold"),
+                        fill="#f59e0b", font=mono(11, "bold"),
                     )
 
             # Single mode: preview the crop p5 will make, so you can spot a bad
@@ -771,17 +775,17 @@ class ReviewApp:
         except Exception as e:
             self.canvas.delete("all")
             self.canvas.create_text(
-                cw // 2, ch // 2, text=str(e), fill="#ef4444", font=("Menlo", 12)
+                cw // 2, ch // 2, text=str(e), fill="#ef4444", font=mono(12)
             )
 
         cur_action = self.actions.get(idx)
         for key, btn in self.action_buttons.items():
             if key == cur_action:
                 btn.config(
-                    bg="#1e293b", fg=ACTIONS[key]["color"], font=("Menlo", 11, "bold")
+                    bg="#1e293b", fg=ACTIONS[key]["color"], font=mono(11, "bold")
                 )
             else:
-                btn.config(bg="#0f0f0f", fg="#94a3b8", font=("Menlo", 11))
+                btn.config(bg="#0f0f0f", fg="#94a3b8", font=mono(11))
 
         self.lbl_action.config(
             text=(
@@ -1281,7 +1285,7 @@ class ReviewApp:
                 "⇧drag = move · ⏎ save · ⎋ cancel · ⌫ reset"
             ),
             fill="#22ff66",
-            font=("Menlo", 10),
+            font=mono(10),
             tags="ov",
         )
 
@@ -1712,7 +1716,7 @@ class ReviewApp:
                 "drag box/corners/edges · ⏎ save · ⎋ cancel · ⌫ auto"
             ),
             fill="#22ff66",
-            font=("Menlo", 10),
+            font=mono(10),
             tags="ov",
         )
 
