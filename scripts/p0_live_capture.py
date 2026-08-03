@@ -36,7 +36,7 @@ from collections import deque
 import cv2
 import numpy as np
 
-from live_state import LiveDetector
+from live_state import LiveDetector, keyframe_record
 from utils import (
     log,
     ProjectPaths,
@@ -306,17 +306,7 @@ def main():
         filename = f"frame{fi:06d}.jpg"
         cv2.imwrite(str(paths.images / filename), best_frame,
                     [cv2.IMWRITE_JPEG_QUALITY, args.jpeg_quality])
-        keyframes.append({
-            "frame_index": fi,
-            "time_sec": round(fi / args.fps, 2),
-            "motion_value": round(capture.motion, 4),
-            "sharpness": round(capture.sharpness, 1),
-            "filename": filename,
-            "spread_start": spread_start,
-            "spread_end": fi,
-            "spread_duration": round((fi - spread_start) / args.fps, 3),
-            "source": "live",
-        })
+        keyframes.append(keyframe_record(capture, args.fps, spread_start, filename))
         flash_text = f"CAPTURED #{len(keyframes)} ({capture.reason})"
         flash_until = time.time() + 0.8
         log(f"  Captured #{len(keyframes)}: frame {fi} "

@@ -7,7 +7,7 @@
 # Usage (batch):
 #   make all VIDEO=recordings/mybook.mp4
 
-ifeq ($(filter install install-legacy help live clean tkinter probe-camera test,$(MAKECMDGOALS)),)
+ifeq ($(filter install install-legacy help live live-web clean tkinter probe-camera test,$(MAKECMDGOALS)),)
 ifeq ($(strip $(VIDEO)),)
 $(error VIDEO is required. Usage: make all VIDEO=recordings/mybook.mp4)
 endif
@@ -63,8 +63,10 @@ SETTLE        ?= 2.0
 TURN          ?= 5.0
 SETTLE_TIME   ?= 0.3
 PREVIEW_HEIGHT ?= 720
+# live-web: port the capture page is served on (http://localhost:$(PORT))
+PORT          ?= 8412
 
-.PHONY: all bw live finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install install-legacy tkinter probe-camera test help
+.PHONY: all bw live live-web finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install install-legacy tkinter probe-camera test help
 
 help:
 	@echo "ScanStudio Pipeline"
@@ -74,6 +76,7 @@ help:
 	@echo "  all           Full pipeline (pauses at review)"
 	@echo "  bw            Binarize + B&W PDF"
 	@echo "  live          P0: Live webcam capture (make live NAME=mybook)"
+	@echo "  live-web      P0: Live capture via Chrome's camera (ChromeOS-friendly)"
 	@echo "  probe-camera  List camera indices and which one delivers 4K"
 	@echo "  finish        P4-P9 back half (run after 'live')"
 	@echo ""
@@ -99,6 +102,7 @@ help:
 	@echo "  MODE=$(MODE)  (double=book spreads, single=loose docs)"
 	@echo "  SPLIT_DOCS=$(SPLIT_DOCS)  (auto=one PDF per document too, never=combined only)"
 	@echo "  live: CAMERA=$(CAMERA)  SETTLE=$(SETTLE)  TURN=$(TURN)  SETTLE_TIME=$(SETTLE_TIME)  PREVIEW_HEIGHT=$(PREVIEW_HEIGHT)"
+	@echo "  live-web: PORT=$(PORT)  (plus SETTLE/TURN/SETTLE_TIME above)"
 
 all: motion peaks keyframes finish
 	@echo "Pipeline complete: $(PDF)"
@@ -120,6 +124,20 @@ endif
 	$(PYTHON) $(SCRIPTS)/p0_live_capture.py output/$(NAME) recordings/$(NAME).mp4 \
 		--camera $(CAMERA) --settle-threshold $(SETTLE) --turn-threshold $(TURN) \
 		--settle-time $(SETTLE_TIME) --preview-height $(PREVIEW_HEIGHT)
+	@echo "Live capture done. Continue with: make finish VIDEO=recordings/$(NAME).mp4"
+
+# Live capture (P0) with the browser as the camera. Same artifacts as 'live';
+# the only road to the camera on ChromeOS, where the container has no
+# /dev/video*. Open http://localhost:$(PORT) in Chrome once it starts
+# (ChromeOS: forward the port first — Settings > Linux > Port forwarding).
+live-web:
+ifeq ($(strip $(NAME)),)
+	$(error NAME is required. Usage: make live-web NAME=mybook)
+endif
+	@mkdir -p recordings
+	$(PYTHON) $(SCRIPTS)/p0_web_capture.py output/$(NAME) recordings/$(NAME).mp4 \
+		--port $(PORT) --settle-threshold $(SETTLE) --turn-threshold $(TURN) \
+		--settle-time $(SETTLE_TIME)
 	@echo "Live capture done. Continue with: make finish VIDEO=recordings/$(NAME).mp4"
 
 bw: binarize pdf-bw

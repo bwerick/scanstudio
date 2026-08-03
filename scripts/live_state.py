@@ -69,6 +69,27 @@ def build_spreads(peaks, total_len, fps):
             for i, (s, e) in enumerate(bounds)]
 
 
+def keyframe_record(capture, fps, spread_start, filename, source="live"):
+    """One keyframes.json entry, in the shape P3 emits.
+
+    Both front ends (the local cv2 loop and the browser server) build their
+    entries here, so the file downstream phases read cannot drift between them.
+    ``spread_start`` is the previous keyframe's frame_index, or 0 for the first.
+    """
+    fi = capture.frame_index
+    return {
+        "frame_index": fi,
+        "time_sec": round(fi / fps, 2),
+        "motion_value": round(capture.motion, 4),
+        "sharpness": round(capture.sharpness, 1),
+        "filename": filename,
+        "spread_start": spread_start,
+        "spread_end": fi,
+        "spread_duration": round((fi - spread_start) / fps, 3),
+        "source": source,
+    }
+
+
 @dataclass(frozen=True)
 class Capture:
     """The detector's choice of which frame to keep, for the caller to resolve.

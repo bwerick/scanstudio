@@ -138,6 +138,7 @@ Most targets require `VIDEO=path/to/file.mp4`. The exception is `make live`, whi
 | Command | Description |
 |---------|-------------|
 | `make live NAME=...` | P0: Live webcam capture — records + selects keyframes, then run `make finish VIDEO=recordings/<NAME>.mp4` |
+| `make live-web NAME=...` | P0 with Chrome as the camera — same artifacts; the only camera path on ChromeOS |
 | `make finish VIDEO=...` | Back half (P4–P9): review, crop, split, page-review, PDF — run after `make live` |
 | `make all VIDEO=...` | Full pipeline — runs P1–P7 and P9, pauses at P4 and P7 |
 | `make bw VIDEO=...` | Binarize + B&W PDF (run after `make all`) |
@@ -189,6 +190,18 @@ make finish VIDEO=recordings/mybook.mp4
 > **Camera selection:** `make live` requests 4K and `CAMERA=auto` (the default) picks whichever connected camera actually delivers it — indices shuffle on reconnect (and on Linux one physical camera usually claims several `/dev/video*` nodes, only one of which captures), so run `make probe-camera` to see what each reports, or set `CAMERA=<index>` to force one. `CAMERA=<n>` is `/dev/video<n>` on Linux. Mount the camera on a fixed stand so framing stays stable across the session.
 >
 > The capture backend is chosen per platform: AVFoundation on macOS, V4L2 on Linux — the only ones that expose a webcam's high-res modes. On Linux the format is set to MJPG before the resolution, since most UVC cameras offer 4K only as MJPG and default to raw YUYV.
+
+### P0 — Live Capture in the browser (`make live-web`)
+
+Same phase, different front end: **Chrome owns the camera** via `getUserMedia`/`MediaRecorder`, and streams small analysis frames to a local server (`scripts/p0_web_capture.py`) that runs the *same* detector (`scripts/live_state.py`) as `make live` — two front ends, one brain, identical artifacts, so `make finish` works unchanged.
+
+```bash
+make live-web NAME=mybook       # then open http://localhost:8412 in Chrome
+```
+
+Built for **ChromeOS**: the Crostini container has no `uvcvideo` kernel module and therefore no `/dev/video*` regardless of the USB-sharing toggles, so the browser is the only road to the camera there. Before opening the page, forward the port once: *Settings → Linux → Port forwarding → Add 8412* (`localhost` is a secure context, `penguin.linux.test` is not). The page uses `MediaStreamTrackProcessor`, so it needs Chrome/Edge 94+, and the same keys as `make live` work in the tab (`Q` finishes).
+
+Two differences from the native path: the recording is encoded by the browser (hardware H.264/VP9) and normalized to constant frame rate at the end — with `ffmpeg` if installed (recommended: `sudo apt install ffmpeg`), else OpenCV — because P4 scrubs the recording by frame index; and keep the tab visible while scanning, since a hidden tab stops frame analysis (the page warns if this happens).
 
 ### P1 — Motion Signal
 

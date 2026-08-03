@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<!--
+  ScanStudio Phase 0 — browser capture page.
+
+  Served by scripts/p0_web_capture.py, which runs the page-turn detector; this
+  page owns the camera. It streams small grayscale analysis frames over the
+  WebSocket, keeps a short ring of full-resolution VideoFrames so the server
+  can ask for "the frame at timestamp T" when the detector picks a keyframe,
+  and records the session with MediaRecorder (hardware encode), shipping
+  chunks to the server as they are produced.
+
+  Decision logic lives server-side on purpose: two front ends, one brain.
+  Everything here is plumbing — capture, downscale, encode, HUD.
+
+  Requires Chrome/Edge 94+ (MediaStreamTrackProcessor). On ChromeOS, open via
+  http://localhost:PORT (a secure context) after adding the port under
+  Settings > Linux > Port forwarding.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ScanStudio — Live Capture</title>
+<style>
+  :root {
+    --bg: #101216; --panel: #1a1e26; --text: #e8e8e8; --dim: #9aa0aa;
+    --ok: #2ecc71; --warn: #f39c12; --err: #e74c3c; --accent: #4aa3ff;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+
+  /* ── HUD bar (above the frame, like the native front end) ── */
+  #hud {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    background: var(--panel); padding: 8px 14px;
+  }
+  #state {
+    font-weight: 700; letter-spacing: .05em; padding: 3px 10px; border-radius: 4px;
+    background: #333; min-width: 92px; text-align: center;
+  }
+  #state.WAITING { background: #6b5d00; color: #ffd54a; }
+  #state.SETTLED { background: #10461f; color: #57e389; }
+  #state.TURNING { background: #5c3a00; color: #ffab40; }
+  #barwrap { flex: 1 1 220px; min-width: 160px; position: relative;
+             height: 18px; background: #2a2f3a; border-radius: 3px; }
+  #bar { height: 100%; width: 0%; background: var(--ok); border-radius: 3px;
+         transition: width 60ms linear; }
+  .tick { position: absolute; top: -4px; bottom: -4px; width: 2px; }
+  #stats { color: var(--dim); white-space: nowrap; }
+  #count { font-weight: 700; color: var(--text); }
+  #res { color: #ffe082; white-space: nowrap; }
+  #paused-chip { display: none; color: #fff; background: var(--err);
+                 padding: 3px 10px; border-radius: 4px; font-weight: 700; }
+  button {
+    background: #2a2f3a; color: var(--text); border: 1px solid #3a4150;
+    border-radius: 5px; padding: 6px 12px; font: inherit; cursor: pointer;
+  }
+  button:hover { background: #343b49; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #08131f; font-weight: 700; }
+  button.danger { border-color: #7a2e26; }
+
+  /* ── Stage ── */
+  #stage { flex: 1; position: relative; display: flex;
+           align-items: center; justify-content: center; overflow: hidden; }
+  video { max-width: 100%; max-height: 100%; }
+  #flash {
+    position: absolute; inset: 0; display: none;
+    align-items: center; justify-content: center; pointer-events: none;
+    font-size: clamp(22px, 4vw, 44px); font-weight: 800; color: var(--ok);
+    text-shadow: 0 2px 12px rgba(0,0,0,.8);
+  }
+  #banner {
+    position: absolute; top: 0; left: 0; right: 0; display: none;
+    background: var(--err); color: #fff; padding: 8px 14px; font-weight: 600;
+  }
+
+  /* ── Start / summary overlays ── */
+  .overlay {
+    position: absolute; inset: 0; background: var(--bg);
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 14px; text-align: center; padding: 24px;
+  }
+  .overlay h1 { font-size: 22px; }
+  .overlay p { color: var(--dim); max-width: 46em; }
+  .overlay code { background: var(--panel); padding: 2px 8px; border-radius: 4px;
+                  color: #ffe082; user-select: all; }
+  #summary { display: none; }
+
+  /* ── Footer ── */
+  #footer { display: flex; justify-content: space-between; gap: 12px;
+            background: var(--panel); color: var(--dim); padding: 6px 14px;
+            flex-wrap: wrap; }
+  kbd { background: #2a2f3a; border-radius: 3px; padding: 0 6px; color: var(--text); }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <span id="state">—</span>
+  <span id="paused-chip">PAUSED</span>
+  <div id="barwrap"><div id="bar"></div></div>
+  <span id="stats">motion <span id="motion">0.0</span> · lum <span id="lum">0</span></span>
+  <span>captured: <span id="count">0</span></span>
+  <span id="res"></span>
+  <button id="btn-capture" title="C">Capture</button>
+  <button id="btn-undo" title="U">Undo</button>
+  <button id="btn-pause" title="Space">Pause</button>
+  <button id="btn-mute" title="M">Mute</button>
+  <button id="btn-finish" class="danger" title="Q">Finish</button>
+</div>
+
+<div id="stage">
+  <video id="video" autoplay playsinline muted></video>
+  <div id="banner"></div>
+  <div id="flash"></div>
+
+  <div id="start" class="overlay">
+    <h1>ScanStudio — Live Capture</h1>
+    <p id="start-msg">Connecting to the capture server…</p>
+    <button id="btn-start" class="primary" disabled>Start capture</button>
+    <p>Chrome will ask for camera permission. Keep this tab visible while
+       scanning — a hidden tab stops frame analysis.</p>
+  </div>
+
+  <div id="summary" class="overlay">
+    <h1>Capture saved</h1>
+    <p id="summary-body"></p>
+    <p>Continue with: <code id="summary-next"></code></p>
+  </div>
+</div>
+
+<div id="footer">
+  <span><kbd>Q</kbd> finish · <kbd>U</kbd> undo · <kbd>C</kbd> capture ·
+        <kbd>Space</kbd> pause · <kbd>M</kbd> mute</span>
+  <span id="status">—</span>
+</div>
+
+<script>
+"use strict";
+
+const $ = id => document.getElementById(id);
+const setStatus = t => { $("status").textContent = t; };
+
+let cfg = null, stream = null, track = null, recorder = null, reader = null;
+let paused = false, muted = false, finishing = false, done = false;
+let audioCtx = null;
+let chunkChain = Promise.resolve();   // keeps recorder chunks in send order
+let chunkSeq = 0, skippedSends = 0;
+const ring = [];                      // {ts, frame: VideoFrame}, newest last
+
+// ── WebSocket ────────────────────────────────────────────────
+
+const ws = new WebSocket(`ws://${location.host}/ws`);
+ws.binaryType = "arraybuffer";
+ws.onmessage = ev => { if (typeof ev.data === "string") handle(JSON.parse(ev.data)); };
+ws.onclose = () => {
+  if (!done && !finishing) fatal("Connection to the capture server was lost.");
+};
+
+function send(obj) { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+function handle(m) {
+  switch (m.type) {
+    case "config":
+      cfg = m;
+      placeThresholdTicks();
+      $("start-msg").textContent =
+        `Server ready — requesting ${m.capture_width}x${m.capture_height} @ ${m.fps} fps.`;
+      $("btn-start").disabled = false;
+      break;
+    case "tick":      updateHud(m); break;
+    case "capture":   sendFullRes(m); break;
+    case "captured":  flash(`CAPTURED #${m.count} (${m.reason})`); setCount(m.count); ding(); break;
+    case "undone":    flash(`UNDO #${m.count + 1}`); setCount(m.count); break;
+    case "normalizing": setStatus("Normalizing recording — this can take a while…"); break;
+    case "finished":  showSummary(m); break;
+    case "error":     fatal(m.message); break;
+  }
+}
+
+// ── Camera + pipelines ───────────────────────────────────────
+
+async function start() {
+  if (!("MediaStreamTrackProcessor" in window)) {
+    fatal("This page needs Chrome or Edge 94+ (MediaStreamTrackProcessor)."); return;
+  }
+  $("btn-start").disabled = true;
+  audioCtx = new AudioContext();      // created on the click so sound is allowed
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { width:  { ideal: cfg.capture_width },
+               height: { ideal: cfg.capture_height },
+               frameRate: { ideal: cfg.fps } },
+    });
+  } catch (e) {
+    fatal(`Camera unavailable: ${e.message}`); return;
+  }
+  track = stream.getVideoTracks()[0];
+  const s = track.getSettings();
+  $("video").srcObject = stream;
+  $("res").textContent = `${resLabel(s.height)} ${s.width}x${s.height}`;
+  $("start").style.display = "none";
+
+  const mime = pickMime();
+  recorder = new MediaRecorder(stream, {
+    mimeType: mime,
+    videoBitsPerSecond: Math.round(s.width * s.height * cfg.fps * 0.12),
+  });
+  recorder.ondataavailable = e => {
+    if (!e.data.size) return;
+    const seq = chunkSeq++;
+    chunkChain = chunkChain.then(async () => {
+      sendTagged(3, seq, await e.data.arrayBuffer());
+    });
+  };
+
+  send({ type: "hello", width: s.width, height: s.height,
+         frame_rate: s.frameRate, mime });
+  requestWakeLock();
+  recorder.start(cfg.timeslice_ms);
+  setStatus(`Recording (${mime})`);
+  pump();
+}
+
+function pickMime() {
+  // webm first: MediaRecorder's mp4 muxing is newer and stricter with
+  // timeslice; ffmpeg/OpenCV read all of these for the CFR normalize.
+  const candidates = ["video/webm;codecs=h264", "video/webm;codecs=vp9",
+                      "video/webm;codecs=vp8", "video/webm", "video/mp4"];
+  return candidates.find(c => MediaRecorder.isTypeSupported(c)) || "";
+}
+
+async function pump() {
+  const proc = new MediaStreamTrackProcessor({ track });
+  reader = proc.readable.getReader();
+  const canvas = new OffscreenCanvas(16, 16);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  try {
+    while (true) {
+      const { value: frame, done: eos } = await reader.read();
+      if (eos) break;
+      ring.push({ ts: frameTs(frame), frame });
+      while (ring.length > cfg.ring) ring.shift().frame.close();
+      analyze(frame, canvas, ctx);
+    }
+  } catch (e) {
+    if (!finishing) setStatus(`Analysis stopped: ${e.message}`);
+  }
+}
+
+function frameTs(frame) {
+  return frame.timestamp ?? Math.round(performance.now() * 1000);
+}
+
+function analyze(frame, canvas, ctx) {
+  // Drop (rather than queue) when the socket is backed up; the server
+  // gap-fills missing timeline slots, so a dropped analysis frame degrades
+  // gracefully while an unbounded send queue would not.
+  if (ws.readyState !== 1 || ws.bufferedAmount > 8_000_000) { skippedSends++; return; }
+  const ah = cfg.analysis_height;
+  const aw = Math.round(frame.displayWidth * ah / frame.displayHeight);
+  if (canvas.width !== aw || canvas.height !== ah) {
+    canvas.width = aw; canvas.height = ah;
+  }
+  ctx.drawImage(frame, 0, 0, aw, ah);
+  const rgba = ctx.getImageData(0, 0, aw, ah).data;
+  const gray = new Uint8Array(aw * ah);
+  // OpenCV's fixed-point RGB->gray, so both front ends measure the same signal.
+  for (let i = 0, j = 0; j < gray.length; i += 4, j++) {
+    gray[j] = (4899 * rgba[i] + 9617 * rgba[i + 1] + 1868 * rgba[i + 2] + 8192) >> 14;
+  }
+  const buf = new ArrayBuffer(13 + gray.length);
+  const dv = new DataView(buf);
+  dv.setUint8(0, 1);
+  dv.setFloat64(1, frameTs(frame), true);
+  dv.setUint16(9, aw, true);
+  dv.setUint16(11, ah, true);
+  new Uint8Array(buf, 13).set(gray);
+  ws.send(buf);
+}
+
+async function sendFullRes(m) {
+  const item = ring.find(r => r.ts === m.ts_us);
+  if (!item) { send({ type: "capture_missing", frame_index: m.frame_index }); return; }
+  const f = item.frame;
+  const canvas = new OffscreenCanvas(f.displayWidth, f.displayHeight);
+  canvas.getContext("2d").drawImage(f, 0, 0);   // sync, before f can age out
+  const blob = await canvas.convertToBlob(
+    { type: "image/jpeg", quality: cfg.jpeg_quality / 100 });
+  sendTagged(2, m.frame_index, await blob.arrayBuffer());
+}
+
+function sendTagged(tag, u32, bytes) {
+  const buf = new ArrayBuffer(5 + bytes.byteLength);
+  const dv = new DataView(buf);
+  dv.setUint8(0, tag);
+  dv.setUint32(1, u32, true);
+  new Uint8Array(buf, 5).set(new Uint8Array(bytes));
+  if (ws.readyState === 1) ws.send(buf);
+}
+
+// ── Finish ───────────────────────────────────────────────────
+
+async function finishSession() {
+  if (finishing || !cfg || !track) return;
+  finishing = true;
+  setStatus("Stopping…");
+  try { if (reader) await reader.cancel(); } catch (e) { /* already done */ }
+  if (recorder && recorder.state !== "inactive") {
+    await new Promise(res => { recorder.onstop = res; recorder.stop(); });
+  }
+  await chunkChain;                    // last chunk on the wire before finish
+  track.stop();
+  send({ type: "finish" });
+  setStatus("Saving…");
+}
+
+function showSummary(m) {
+  done = true;
+  ring.forEach(r => r.frame.close());
+  ring.length = 0;
+  $("summary-body").textContent =
+    `${m.keyframes} keyframes over ${m.total_frames} frames · ` +
+    `recording: ${m.video} · normalize: ${m.normalize}`;
+  $("summary-next").textContent = `make finish VIDEO=${m.video}`;
+  $("summary").style.display = "flex";
+  setStatus("Done — you can close this tab.");
+}
+
+function fatal(msg) {
+  $("banner").textContent = msg;
+  $("banner").style.display = "block";
+  setStatus(msg);
+}
+
+// ── HUD ──────────────────────────────────────────────────────
+
+function placeThresholdTicks() {
+  const scale = cfg.turn_threshold * 1.6;      // same fixed scale as the native HUD
+  for (const [thr, color] of [[cfg.settle_threshold, "var(--ok)"],
+                              [cfg.turn_threshold, "var(--warn)"]]) {
+    const el = document.createElement("div");
+    el.className = "tick";
+    el.style.left = `${Math.min(thr / scale, 1) * 100}%`;
+    el.style.background = color;
+    $("barwrap").appendChild(el);
+  }
+}
+
+function updateHud(m) {
+  const st = $("state");
+  st.textContent = m.state;
+  st.className = m.state;
+  const scale = cfg.turn_threshold * 1.6;
+  $("bar").style.width = `${Math.min(m.smooth / scale, 1) * 100}%`;
+  $("bar").style.background =
+    m.state === "TURNING" ? "var(--warn)" : m.state === "SETTLED" ? "var(--ok)" : "#888";
+  $("motion").textContent = m.smooth.toFixed(1);
+  $("lum").textContent = `${m.brightness.toFixed(0)} (${(m.brightness / 2.55).toFixed(0)}%)`;
+  setCount(m.captured);
+  paused = m.paused;
+  $("paused-chip").style.display = paused ? "inline" : "none";
+  $("btn-pause").textContent = paused ? "Resume" : "Pause";
+}
+
+function setCount(n) { $("count").textContent = n; }
+
+let flashTimer = null;
+function flash(text) {
+  const el = $("flash");
+  el.textContent = text;
+  el.style.display = "flex";
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { el.style.display = "none"; }, 800);
+}
+
+function ding() {
+  if (muted || !audioCtx) return;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.frequency.value = 880;
+  g.gain.setValueAtTime(0.15, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + 0.25);
+}
+
+function resLabel(h) {
+  for (const [std, name] of [[2160, "4K"], [1440, "1440p"], [1080, "1080p"],
+                             [720, "720p"], [480, "480p"]])
+    if (Math.abs(h - std) <= 16) return name;
+  return `${h}p`;
+}
+
+// ── Controls ─────────────────────────────────────────────────
+
+$("btn-start").onclick = start;
+$("btn-capture").onclick = () => send({ type: "force" });
+$("btn-undo").onclick = () => send({ type: "undo" });
+$("btn-pause").onclick = () => send({ type: "pause", value: !paused });
+$("btn-mute").onclick = () => {
+  muted = !muted;
+  $("btn-mute").textContent = muted ? "Unmute" : "Mute";
+};
+$("btn-finish").onclick = finishSession;
+
+document.addEventListener("keydown", e => {
+  if (e.repeat) return;
+  switch (e.key.toLowerCase()) {
+    case "q": finishSession(); break;
+    case "c": $("btn-capture").click(); break;
+    case "u": $("btn-undo").click(); break;
+    case "m": $("btn-mute").click(); break;
+    case " ": e.preventDefault(); $("btn-pause").click(); break;
+  }
+});
+
+// ── Keep the tab awake and honest ────────────────────────────
+
+let wakeLock = null;
+async function requestWakeLock() {
+  try { wakeLock = await navigator.wakeLock?.request("screen"); } catch (e) { /* best effort */ }
+}
+document.addEventListener("visibilitychange", () => {
+  if (!track || done) return;
+  if (document.hidden) {
+    send({ type: "hidden" });
+  } else {
+    requestWakeLock();
+    $("banner").textContent =
+      "This tab was hidden — analysis pauses while hidden, so pages turned then may be missed.";
+    $("banner").style.display = "block";
+    setTimeout(() => { if (!done) $("banner").style.display = "none"; }, 6000);
+  }
+});
+</script>
+</body>
+</html>
