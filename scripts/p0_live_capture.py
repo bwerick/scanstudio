@@ -35,8 +35,8 @@ from collections import deque
 
 import cv2
 import numpy as np
-from scipy.ndimage import uniform_filter1d
 
+from live_state import LiveDetector
 from utils import (
     log,
     ProjectPaths,
@@ -46,26 +46,6 @@ from utils import (
     prepare_capture,
     sound_player,
 )
-
-
-def laplacian_sharpness(gray):
-    h, w = gray.shape
-    center = gray[int(h * 0.1):int(h * 0.9), int(w * 0.1):int(w * 0.9)]
-    return float(cv2.Laplacian(center, cv2.CV_64F).var())
-
-
-def build_spreads(peaks, total_len, fps):
-    """Spread list in the same shape P2 emits (boundaries between page turns)."""
-    if len(peaks) == 0:
-        bounds = [(0, total_len)]
-    else:
-        bounds = [(0, int(peaks[0]))]
-        bounds += [(int(peaks[i]), int(peaks[i + 1])) for i in range(len(peaks) - 1)]
-        bounds.append((int(peaks[-1]), total_len))
-    return [{"spread_index": i + 1, "start_frame": s, "end_frame": e,
-             "frame_count": e - s, "duration_sec": round((e - s) / fps, 3),
-             "start_time": round(s / fps, 2), "end_time": round(e / fps, 2)}
-            for i, (s, e) in enumerate(bounds)]
 
 
 def resolution_label(w, h):
@@ -290,18 +270,21 @@ def main():
     writer_thread = threading.Thread(target=writer_worker, daemon=True)
     writer_thread.start()
 
-    settle_frames = max(1, int(args.settle_time * args.fps))
-    buf = deque(maxlen=settle_frames)   # (frame_index, frame_bgr, sharpness)
+    det = LiveDetector(fps=args.fps,
+                       settle_threshold=args.settle_threshold,
+                       turn_threshold=args.turn_threshold,
+                       settle_time=args.settle_time,
+                       smoothing_window=args.smoothing_window)
 
-    diffs = []                  # one motion value per recorded frame
+    # The detector chooses a frame *index*; resolving it to pixels is the
+    # caller's job, and is the one thing a remote front end would do
+    # differently (asking the browser for that frame instead of a local
+    # buffer). Sized to the detector's window so anything it can name is
+    # still here — the linear scan is over ~10 entries.
+    frames = deque(maxlen=det.settle_frames)    # (frame_index, frame_bgr)
+
     keyframes = []
-    prev_small = None
     frame_idx = -1
-    state = "WAITING"
-    still_run = 0               # consecutive low-motion frames
-    saw_turn = False
-    turn_frames = []            # frame index of each detected page turn (for peaks.npy)
-    paused = False
     muted = False
     flash_text, flash_until = "", 0.0
 
@@ -311,11 +294,14 @@ def main():
         if not muted:
             play_chime()
 
-    def commit_capture(reason):
+    def commit_capture(capture):
         nonlocal flash_text, flash_until
-        if not buf:
+        if capture is None:
             return
-        fi, best_frame, best_sharp = max(buf, key=lambda b: b[2])
+        fi = capture.frame_index
+        best_frame = next((f for i, f in frames if i == fi), None)
+        if best_frame is None:
+            return
         spread_start = keyframes[-1]["frame_index"] if keyframes else 0
         filename = f"frame{fi:06d}.jpg"
         cv2.imwrite(str(paths.images / filename), best_frame,
@@ -323,18 +309,18 @@ def main():
         keyframes.append({
             "frame_index": fi,
             "time_sec": round(fi / args.fps, 2),
-            "motion_value": round(float(diffs[fi]) if fi < len(diffs) else 0.0, 4),
-            "sharpness": round(best_sharp, 1),
+            "motion_value": round(capture.motion, 4),
+            "sharpness": round(capture.sharpness, 1),
             "filename": filename,
             "spread_start": spread_start,
             "spread_end": fi,
             "spread_duration": round((fi - spread_start) / args.fps, 3),
             "source": "live",
         })
-        flash_text = f"CAPTURED #{len(keyframes)} ({reason})"
+        flash_text = f"CAPTURED #{len(keyframes)} ({capture.reason})"
         flash_until = time.time() + 0.8
         log(f"  Captured #{len(keyframes)}: frame {fi} "
-            f"(sharp={best_sharp:.0f}, {reason})")
+            f"(sharp={capture.sharpness:.0f}, {capture.reason})")
         play_ding()
 
     def undo_capture():
@@ -374,44 +360,19 @@ def main():
         else:
             small = cv2.resize(frame, (aw, args.analysis_height), interpolation=cv2.INTER_AREA)
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        motion = float(np.mean(cv2.absdiff(prev_small, gray))) if prev_small is not None else 0.0
-        prev_small = gray
-        diffs.append(motion)
-        brightness = float(np.mean(gray))   # mean luma of the scene (0-255)
 
-        # Short trailing mean for stable thresholding (online smoothing)
-        win_n = min(args.smoothing_window, len(diffs))
-        smooth = float(np.mean(diffs[-win_n:]))
-
-        # cap.read() returns a fresh array each call, so the rolling sharpness
-        # window can hold the frame directly — no per-frame full-res copy.
-        buf.append((frame_idx, frame, laplacian_sharpness(gray)))
-
-        if not paused:
-            still = smooth < args.settle_threshold
-            still_run = still_run + 1 if still else 0
-
-            if state == "WAITING":
-                if still and still_run >= settle_frames:
-                    commit_capture("initial")
-                    state = "SETTLED"
-            elif state == "SETTLED":
-                if smooth > args.turn_threshold:
-                    state = "TURNING"
-                    saw_turn = True
-                    turn_frames.append(frame_idx)
-            elif state == "TURNING":
-                if still and still_run >= settle_frames and saw_turn:
-                    commit_capture("settle")
-                    state = "SETTLED"
-                    saw_turn = False
+        # cap.read() returns a fresh array each call, so the rolling window can
+        # hold the frame directly — no per-frame full-res copy.
+        frames.append((frame_idx, frame))
+        tick = det.update(frame_idx, gray)
+        commit_capture(tick.capture)
 
         # Draw the HUD straight onto the downscaled preview (a fresh array each
         # frame), so there's no full-res copy and imshow blits a small image.
-        disp = draw_overlay(preview, state, motion, smooth,
+        disp = draw_overlay(preview, tick.state, tick.motion, tick.smooth,
                             args.settle_threshold, args.turn_threshold,
-                            len(keyframes), paused, flash_text, flash_until,
-                            header_h, muted, res_text, brightness)
+                            len(keyframes), det.paused, flash_text, flash_until,
+                            header_h, muted, res_text, tick.brightness)
         cv2.imshow(win, disp)
 
         key = cv2.waitKey(1) & 0xFF
@@ -420,12 +381,9 @@ def main():
         elif key == ord("u"):
             undo_capture()
         elif key == ord("c"):
-            commit_capture("manual")
-            state = "SETTLED"
-            saw_turn = False
+            commit_capture(det.force_capture())
         elif key == ord(" "):
-            paused = not paused
-            still_run = 0
+            det.set_paused(not det.paused)
         elif key == ord("m"):
             muted = not muted
             log(f"  Sound {'muted' if muted else 'unmuted'}")
@@ -441,17 +399,14 @@ def main():
     log(f"Recorded {total_frames} frames in {elapsed:.1f}s "
         f"({total_frames / max(elapsed, 1e-3):.0f} fps), {len(keyframes)} keyframes")
 
-    diffs_arr = np.array(diffs, dtype=np.float64)
-    smoothed = uniform_filter1d(diffs_arr, size=args.smoothing_window) if len(diffs_arr) else diffs_arr
-    np.save(str(paths.data / "motion_signal.npy"), diffs_arr)
-    np.save(str(paths.data / "smoothed_signal.npy"), smoothed)
+    np.save(str(paths.data / "motion_signal.npy"), det.motion_signal())
+    np.save(str(paths.data / "smoothed_signal.npy"), det.smoothed_signal())
 
     # Emit the P2/P3 markers too, so `make finish`/`make all` see the front-half
     # dependency chain as satisfied and don't try to regenerate these keyframes.
-    peaks_arr = np.array(sorted(turn_frames), dtype=np.int64)
-    np.save(str(paths.data / "peaks.npy"), peaks_arr)
-    spreads = build_spreads(peaks_arr, total_frames, args.fps)
-    (paths.json / "spreads.json").write_text(json.dumps(spreads, indent=2))
+    np.save(str(paths.data / "peaks.npy"), det.peaks())
+    (paths.json / "spreads.json").write_text(
+        json.dumps(det.spreads(total_frames), indent=2))
 
     metadata = {
         "video_path": str(args.video_out),

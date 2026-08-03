@@ -7,7 +7,7 @@
 # Usage (batch):
 #   make all VIDEO=recordings/mybook.mp4
 
-ifeq ($(filter install install-legacy help live clean tkinter probe-camera,$(MAKECMDGOALS)),)
+ifeq ($(filter install install-legacy help live clean tkinter probe-camera test,$(MAKECMDGOALS)),)
 ifeq ($(strip $(VIDEO)),)
 $(error VIDEO is required. Usage: make all VIDEO=recordings/mybook.mp4)
 endif
@@ -64,7 +64,7 @@ TURN          ?= 5.0
 SETTLE_TIME   ?= 0.3
 PREVIEW_HEIGHT ?= 720
 
-.PHONY: all bw live finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install install-legacy tkinter probe-camera help
+.PHONY: all bw live finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install install-legacy tkinter probe-camera test help
 
 help:
 	@echo "ScanStudio Pipeline"
@@ -89,6 +89,7 @@ help:
 	@echo "  pdf-bw        P9: Build B&W PDF"
 	@echo ""
 	@echo "  clean         Delete output/<NAME>/ (VIDEO= or NAME=; keeps recording)"
+	@echo "  test          Headless tests (no camera or display needed)"
 	@echo ""
 	@echo "  install         Pipeline dependencies (requirements.txt)"
 	@echo "  install-legacy  Torch etc. for the root legacy scripts (several GB)"
@@ -163,6 +164,12 @@ $(PDF_BW): $(BW_META)
 
 probe-camera:
 	$(PYTHON) $(SCRIPTS)/probe_camera.py
+
+# Headless tests — no camera, no display, no recording needed. Each file runs
+# standalone under plain python, so this needs nothing beyond requirements.txt
+# (pytest works too, if you have it: `pytest tests/`).
+test:
+	@for t in tests/test_*.py; do echo "$$t"; $(PYTHON) $$t || exit 1; done
 
 install: $(VENV) tkinter
 	$(PYTHON) -m pip install -r requirements.txt
