@@ -201,7 +201,7 @@ make live-web NAME=mybook       # then open http://localhost:8412 in Chrome
 
 Built for **ChromeOS**: the Crostini container has no `uvcvideo` kernel module and therefore no `/dev/video*` regardless of the USB-sharing toggles, so the browser is the only road to the camera there. Before opening the page, forward the port once: *Settings → Linux → Port forwarding → Add 8412* (`localhost` is a secure context, `penguin.linux.test` is not). The page uses `MediaStreamTrackProcessor`, so it needs Chrome/Edge 94+, and the same keys as `make live` work in the tab (`Q` finishes).
 
-Two differences from the native path: the recording is encoded by the browser (hardware H.264/VP9) and normalized to constant frame rate at the end — with `ffmpeg` if installed (recommended: `sudo apt install ffmpeg`), else OpenCV — because P4 scrubs the recording by frame index; and keep the tab visible while scanning, since a hidden tab stops frame analysis (the page warns if this happens).
+Two differences from the native path: the recording is encoded by the browser (hardware H.264/VP9) and normalized to constant frame rate at the end — with `ffmpeg` if installed (`make install` sets it up; without it the OpenCV fallback works but is slow at 4K) — because P4 scrubs the recording by frame index; and keep the tab visible while scanning, since a hidden tab stops frame analysis (the page warns if this happens).
 
 ### P1 — Motion Signal
 

@@ -7,7 +7,7 @@
 # Usage (batch):
 #   make all VIDEO=recordings/mybook.mp4
 
-ifeq ($(filter install install-legacy help live live-web clean tkinter probe-camera test,$(MAKECMDGOALS)),)
+ifeq ($(filter install install-legacy help live live-web clean tkinter ffmpeg probe-camera test,$(MAKECMDGOALS)),)
 ifeq ($(strip $(VIDEO)),)
 $(error VIDEO is required. Usage: make all VIDEO=recordings/mybook.mp4)
 endif
@@ -30,7 +30,7 @@ endif
 # Fail early with a clear message if the interpreter is missing, instead of a
 # cryptic "No such file or directory" from every recipe. Skipped for targets
 # that don't need Python (help, clean) and for install (which bootstraps it).
-ifeq ($(filter install install-legacy help clean,$(MAKECMDGOALS)),)
+ifeq ($(filter install install-legacy help clean ffmpeg,$(MAKECMDGOALS)),)
 ifeq ($(shell command -v $(PYTHON) >/dev/null 2>&1 && echo ok),)
 $(error Python interpreter '$(PYTHON)' not found. Run 'make install' to create the venv, or override PYTHON=python3)
 endif
@@ -66,7 +66,7 @@ PREVIEW_HEIGHT ?= 720
 # live-web: port the capture page is served on (http://localhost:$(PORT))
 PORT          ?= 8412
 
-.PHONY: all bw live live-web finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install install-legacy tkinter probe-camera test help
+.PHONY: all bw live live-web finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install install-legacy tkinter ffmpeg probe-camera test help
 
 help:
 	@echo "ScanStudio Pipeline"
@@ -189,7 +189,7 @@ probe-camera:
 test:
 	@for t in tests/test_*.py; do echo "$$t"; $(PYTHON) $$t || exit 1; done
 
-install: $(VENV) tkinter
+install: $(VENV) tkinter ffmpeg
 	$(PYTHON) -m pip install -r requirements.txt
 	@$(PYTHON) -c "import cv2" 2>/dev/null && echo "opencv OK" || { \
 		echo "opencv installed but won't import."; \
@@ -198,6 +198,25 @@ install: $(VENV) tkinter
 		command -v apt-get >/dev/null 2>&1 && \
 			echo "  sudo apt-get install -y libgl1 libglib2.0-0"; \
 		exit 1; \
+	}
+
+# ffmpeg does the fast CFR normalize at the end of `make live-web`; without it
+# OpenCV re-encodes 4K in software, which works but is painfully slow. Unlike
+# tkinter it IS installed with sudo on apt systems (the main audience is
+# ChromeOS Crostini, where sudo is passwordless), but since live-web has the
+# OpenCV fallback, nothing here ever fails `make install`.
+ffmpeg:
+	@command -v ffmpeg >/dev/null 2>&1 && echo "ffmpeg OK" || { \
+		if [ "$$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then \
+			echo "Installing ffmpeg via Homebrew..."; \
+			brew install ffmpeg || echo "WARNING: ffmpeg install failed; live-web falls back to OpenCV"; \
+		elif command -v apt-get >/dev/null 2>&1; then \
+			echo "Installing ffmpeg via apt..."; \
+			sudo apt-get install -y ffmpeg || echo "WARNING: ffmpeg install failed; live-web falls back to OpenCV"; \
+		else \
+			echo "NOTE: no ffmpeg — install it with your package manager for fast"; \
+			echo "live-web finishing (the OpenCV fallback works but is slow at 4K)"; \
+		fi; \
 	}
 
 # Torch and friends for the legacy scripts at the repo root — several GB, and
