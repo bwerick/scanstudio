@@ -228,7 +228,15 @@ class PageReviewApp:
         bind_save(self.root, self._save)
 
     def _in_note(self):
-        return self.root.focus_get() == self.note_entry
+        # focus_get() resolves the focused widget's Tk name in the widget
+        # tree, and raises for names that aren't in it — notably
+        # '__tk__messagebox' while a messagebox dialog is open (a <Configure>
+        # redraw can land exactly then, e.g. under Crostini's window manager).
+        # Whatever holds focus in that case, it isn't the note box.
+        try:
+            return self.root.focus_get() == self.note_entry
+        except (KeyError, tk.TclError):
+            return False
 
     def _leave_note(self):
         """Hand the keyboard back to the review keys, harvesting what was typed.
