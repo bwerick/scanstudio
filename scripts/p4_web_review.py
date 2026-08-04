@@ -39,7 +39,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from corner_net import model_gutter_frac, model_quad_offsets
+from corner_net import model_quad_offsets
 from p5_crop import DEFAULT_SAFETY_MARGIN, _spread_tilt, crop_double_page, \
     crop_to_quad, detect_page_quad
 from utils import (
@@ -335,11 +335,6 @@ class ReviewSession:
                 box_src = "auto"
             if frac is None:
                 prior = resolve_gutter(self.keyframes, idx)
-                if prior is None:
-                    # No operator hint yet: the corner model's spine (when
-                    # a model exists) hints instead, and the shadow scan
-                    # refines it exactly as it would an operator's.
-                    prior = model_gutter_frac(img, box)
                 frac = detect_gutter(cropped, prior=prior) / max(
                     1, cropped.shape[1]
                 )
@@ -532,8 +527,6 @@ class ReviewSession:
             box = [[float(x) / w, float(y) / h] for x, y in quad_px]
             src = "auto"
         prior = resolve_gutter(self.keyframes, idx - 1) if idx > 0 else None
-        if prior is None:
-            prior = model_gutter_frac(img, box)
         auto_g = detect_gutter(cropped, prior=prior) / max(1, cropped.shape[1])
         own_g = kf.get("gutter")
         # Entering the editor adopts Keep, exactly like the Tk app: tuning a

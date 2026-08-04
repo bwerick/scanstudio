@@ -76,7 +76,7 @@ import tkinter as tk
 from tkinter import messagebox
 from PIL import Image, ImageTk
 
-from corner_net import model_gutter_frac, model_quad_offsets
+from corner_net import model_quad_offsets
 from utils import (
     log,
     ProjectPaths,
@@ -1071,11 +1071,8 @@ class ReviewApp:
                 box_src = "auto"
             if frac is None:
                 # No own override: track the spine near the inherited prior
-                # (the nearest earlier correction), else the corner model's
-                # spine when a model exists, else fall back to full auto.
+                # (the nearest earlier correction), else fall back to full auto.
                 prior = resolve_gutter(self.keyframes, idx)
-                if prior is None:
-                    prior = model_gutter_frac(img, box)
                 frac = detect_gutter(cropped, prior=prior) / max(1, cropped.shape[1])
             tl, tr, br, bl = box
             geom = {
@@ -1164,9 +1161,6 @@ class ReviewApp:
             self._split_box_src = "auto"
         self._split_box_dirty = False
         prior = resolve_gutter(self.keyframes, idx - 1) if idx > 0 else None
-        if prior is None:
-            box = [[x / w, y / h] for x, y in self._quad_from_rect()]
-            prior = model_gutter_frac(img, box)
         self._split_auto_gutter = detect_gutter(cropped, prior=prior) / max(
             1, cropped.shape[1]
         )
