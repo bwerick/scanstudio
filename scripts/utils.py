@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -318,6 +319,10 @@ def _mask_plausible(mask) -> bool:
 # use and the import failure is remembered, so a machine without it pays one
 # try and then behaves exactly as before the backstop existed.
 _u2net = {"session": None, "remove": None, "state": "untried"}
+# The web review resolves geometry on the request thread while the consensus
+# vote runs in its own; without a lock a cold cache means two concurrent
+# new_session() calls, each downloading the model.
+_u2net_lock = threading.Lock()
 
 
 def u2net_page_mask(img):
@@ -331,17 +336,18 @@ def u2net_page_mask(img):
     same contract as ``page_mask`` (uint8 0/255, largest blob filled solid),
     or None when rembg isn't installed or finds nothing.
     """
-    if _u2net["state"] == "unavailable":
-        return None
-    if _u2net["session"] is None:
-        try:
-            from rembg import new_session, remove
-
-            _u2net["session"], _u2net["remove"] = new_session("u2net"), remove
-            _u2net["state"] = "ready"
-        except ImportError:
-            _u2net["state"] = "unavailable"
+    with _u2net_lock:
+        if _u2net["state"] == "unavailable":
             return None
+        if _u2net["session"] is None:
+            try:
+                from rembg import new_session, remove
+
+                _u2net["session"], _u2net["remove"] = new_session("u2net"), remove
+                _u2net["state"] = "ready"
+            except ImportError:
+                _u2net["state"] = "unavailable"
+                return None
     m = _u2net["remove"](
         cv2.cvtColor(img, cv2.COLOR_BGR2RGB),
         session=_u2net["session"],
