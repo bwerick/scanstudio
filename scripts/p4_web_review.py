@@ -47,6 +47,7 @@ from utils import (
     WATCHDOG_ALERT_FRAC,
     consensus_geometry,
     detect_gutter,
+    drift_due,
     log,
     measure_quad_offsets,
     page_mask_robust,
@@ -832,7 +833,13 @@ class ReviewSession:
                     abs(shift[ax] - shift_uv[ax]) > TRACK_DEADBAND_FRAC * w
                 ):
                     shift_uv[ax] = shift[ax]
-            flagged = (not measured) or resid > WATCHDOG_ALERT_FRAC * w
+            # Two independent failure modes: a sudden event the residual
+            # sees, and slow accumulation it is nearly blind to (the budget).
+            flagged = (
+                (not measured)
+                or resid > WATCHDOG_ALERT_FRAC * w
+                or drift_due(idx, None if a_idx == "consensus" else a_idx)
+            )
             if shift_uv[0] or shift_uv[1]:
                 tq = quad0 + shift_uv[0] * axes[0] + shift_uv[1] * axes[1]
                 tq_frac = [[float(x) / w, float(y) / h] for x, y in tq]

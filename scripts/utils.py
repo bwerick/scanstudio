@@ -586,6 +586,37 @@ WATCHDOG_ALERT_FRAC = 0.02
 # noise around 0.5–0.7% p90) and a static box shouldn't jitter with it.
 TRACK_DEADBAND_FRAC = 0.006
 CONSENSUS_SAMPLES = 15
+# Drift budget: keyframes a box may ride its anchor before the operator is
+# asked to re-anchor it. Tracking error grows monotonically with this
+# horizon and never self-corrects — measured over three books tracked from a
+# single anchor with no corrections, median max-corner error runs 0.59% of
+# the frame width at horizon 1-15, 1.48% at 16-40, 2.22% at 41-80, 4.35% at
+# 81-150. Frames where the box mangles text (severing >2x the glyph count
+# the operator's own box does, and >25 glyphs) follow the same curve: 0% up
+# to horizon 15, 4% at 16-40, 22% at 41-80, 44% at 81-150. Forty is where
+# that damage starts being common, and it is the strongest predictor
+# available — horizon scores AUC 0.905 for "error >3%", against 0.708 for
+# accumulated shift, 0.600 for the worst per-edge offset, and 0.583 for the
+# non-rigid residual the watchdog already flags on. So the residual alert
+# and this budget are complementary: the residual catches a *sudden* event
+# (a hand, a bumped rig), the budget catches slow accumulation the residual
+# is nearly blind to.
+DRIFT_HORIZON_LIMIT = 40
+
+
+def drift_due(idx, anchor_idx, limit=DRIFT_HORIZON_LIMIT) -> bool:
+    """Whether frame ``idx`` is a re-anchor reminder for its anchor.
+
+    True every ``limit`` keyframes of horizon rather than for every frame
+    past it: once the budget is spent, flagging all of the rest would bury
+    the residual alerts in a wall of duplicates, while one reminder per
+    budget-length reads as the cadence it is. ``anchor_idx`` is the index
+    that owns the box (``resolve_crop_anchor``), or None when the box comes
+    from the session consensus — that box was voted from the whole session
+    rather than placed on a frame, so its horizon is counted from the start.
+    """
+    horizon = idx - (0 if anchor_idx is None else anchor_idx)
+    return horizon > 0 and horizon % limit == 0
 
 
 def _order_quad(pts):
