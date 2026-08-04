@@ -275,6 +275,8 @@ def stats(a):
 def device():
     import torch
 
+    if torch.cuda.is_available():
+        return torch.device("cuda")
     return torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
 
