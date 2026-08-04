@@ -46,6 +46,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -97,26 +98,48 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def normalize_recording(raw_path, out_path, fps, use_ffmpeg=None):
+def normalize_recording(raw_path, out_path, fps, use_ffmpeg=None, progress=None):
     """Re-encode the variable-rate MediaRecorder file to CFR at ``fps``.
 
     P4 seeks the recording with CAP_PROP_POS_FRAMES, so downstream the file
     must be constant-rate on the same timeline the artifacts use. Returns a
-    status string starting with "ok" on success.
+    status string starting with "ok" on success. ``progress``, if given, is
+    called with seconds of output video written so far.
     """
     if use_ffmpeg is None:
         use_ffmpeg = shutil.which("ffmpeg") is not None
 
     if use_ffmpeg:
-        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(raw_path),
+        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-progress", "pipe:1",
+               "-nostats", "-i", str(raw_path),
                "-vf", f"fps={fps:g}", "-c:v", "libx264", "-preset", "veryfast",
                "-crf", "18", "-pix_fmt", "yuv420p", "-an", str(out_path)]
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True)
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True)
         except OSError as e:
             return f"failed: ffmpeg: {e}"
-        if res.returncode != 0:
-            return f"failed: ffmpeg: {res.stderr.strip()[:400]}"
+        # Drain stderr on the side so an error-spewing encode can't deadlock
+        # against the stdout progress reads.
+        err_chunks = []
+        drain = threading.Thread(target=lambda: err_chunks.append(proc.stderr.read()),
+                                 daemon=True)
+        drain.start()
+        # -progress emits key=value blocks every ~0.5s; out_time_us is the
+        # encode position on the output timeline (older ffmpeg spells it
+        # out_time_ms — also microseconds).
+        for line in proc.stdout:
+            key, _, val = line.strip().partition("=")
+            if progress is not None and key in ("out_time_us", "out_time_ms"):
+                try:
+                    progress(int(val) / 1e6)
+                except ValueError:
+                    pass                      # "N/A" before the first frame
+        proc.wait()
+        drain.join(timeout=5)
+        if proc.returncode != 0:
+            err = (err_chunks[0] if err_chunks else "").strip()
+            return f"failed: ffmpeg: {err[:400]}"
         return "ok (ffmpeg)"
 
     # OpenCV fallback: sequential decode, duplicating each frame until the
@@ -147,7 +170,10 @@ def normalize_recording(raw_path, out_path, fps, use_ffmpeg=None):
         writer.write(frame)
         out_n += 1
         prev = frame
-        if out_n >= next_report:
+        if progress is not None:
+            # out_n/fps covers backends whose POS_MSEC is stuck at 0.
+            progress(max(t_ms / 1000.0, out_n / fps))
+        elif out_n >= next_report:
             log(f"    ...{out_n} frames ({out_n / fps:.0f}s of video)")
             next_report += 900
     cap.release()
@@ -155,6 +181,53 @@ def normalize_recording(raw_path, out_path, fps, use_ffmpeg=None):
         return "failed: raw recording has no frames"
     writer.release()
     return f"ok (opencv, {out_n} frames)"
+
+
+def _fmt_secs(s):
+    s = int(round(s))
+    return f"{s // 60}m{s % 60:02d}s" if s >= 60 else f"{s}s"
+
+
+class NormalizeProgress:
+    """Progress reporter for normalize_recording: an in-place terminal bar
+    (periodic log lines when stdout is not a tty), mirrored to the browser
+    tab as throttled "normalizing" messages carrying a fraction and an ETA."""
+
+    def __init__(self, duration_s, send):
+        self.duration_s = duration_s
+        self.send = send
+        self._t0 = time.monotonic()
+        self._next_draw = 0.0         # wall clock of the next terminal update
+        self._next_send = 0.0         # ... and the next browser update
+        self._tty = sys.stdout.isatty()
+        self._drawn = False
+
+    def __call__(self, done_s):
+        now = time.monotonic()
+        frac = min(done_s / self.duration_s, 1.0) if self.duration_s > 0 else 0.0
+        elapsed = now - self._t0
+        eta = elapsed * (1.0 - frac) / frac if frac > 0.02 else None
+        eta_txt = f" · ~{_fmt_secs(eta)} left" if eta is not None else ""
+        if now >= self._next_draw:
+            self._next_draw = now + (0.25 if self._tty else 10.0)
+            if self._tty:
+                n = int(frac * 30)
+                print(f"\r    [{'#' * n}{'.' * (30 - n)}] {frac * 100:3.0f}% · "
+                      f"{done_s:.0f}s / {self.duration_s:.0f}s of video{eta_txt}   ",
+                      end="", flush=True)
+                self._drawn = True
+            else:
+                log(f"    ...normalizing: {frac * 100:.0f}% "
+                    f"({done_s:.0f}s of {self.duration_s:.0f}s){eta_txt}")
+        if now >= self._next_send:
+            self._next_send = now + 1.0
+            self.send({"type": "normalizing", "progress": round(frac, 4),
+                       "eta_s": None if eta is None else round(eta)})
+
+    def finish_line(self):
+        """End the \\r bar with a newline so the next log starts clean."""
+        if self._drawn:
+            print(flush=True)
 
 
 class WebSession:
@@ -416,7 +489,10 @@ class WebSession:
         if self.raw_path is not None:
             self.send({"type": "normalizing"})
             log(f"  Normalizing recording to CFR {cfg.fps:g} fps -> {cfg.video_out}")
-            status = normalize_recording(self.raw_path, cfg.video_out, cfg.fps)
+            reporter = NormalizeProgress(total_frames / cfg.fps, self.send)
+            status = normalize_recording(self.raw_path, cfg.video_out, cfg.fps,
+                                         progress=reporter)
+            reporter.finish_line()
             log(f"  Normalize: {status}")
             if status.startswith("ok") and not cfg.keep_raw:
                 self.raw_path.unlink(missing_ok=True)

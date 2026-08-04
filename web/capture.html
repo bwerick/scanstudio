@@ -187,7 +187,7 @@ function handle(m) {
     case "capture":   sendFullRes(m); break;
     case "captured":  flash(`CAPTURED #${m.count} (${m.reason})`); setCount(m.count); ding(); break;
     case "undone":    flash(`UNDO #${m.count + 1}`); setCount(m.count); break;
-    case "normalizing": setStatus("Normalizing recording — this can take a while…"); break;
+    case "normalizing": showNormalizing(m); break;
     case "notice":    flash("CAPTURE MISSED"); setStatus(m.text); break;
     case "finished":  showSummary(m); break;
     case "error":     fatal(m.message); break;
@@ -498,6 +498,27 @@ async function finishSession() {
   track.stop();
   send({ type: "finish" });
   setStatus("Saving…");
+}
+
+// Repurpose the HUD motion bar as the encode progress bar — the camera is
+// stopped by now, so it sits idle either way.
+function showNormalizing(m) {
+  if (m.progress == null) {
+    setStatus("Normalizing recording — this can take a while…");
+    return;
+  }
+  const pct = Math.round(m.progress * 100);
+  const eta = m.eta_s != null ? ` · ~${fmtSecs(m.eta_s)} left` : "";
+  setStatus(`Normalizing recording — ${pct}%${eta}`);
+  $("state").textContent = "SAVING";
+  $("state").className = "";
+  $("bar").style.width = `${pct}%`;
+  $("bar").style.background = "var(--accent)";
+}
+
+function fmtSecs(s) {
+  return s >= 60 ? `${Math.floor(s / 60)}m${String(Math.round(s % 60)).padStart(2, "0")}s`
+                 : `${Math.round(s)}s`;
 }
 
 function showSummary(m) {
