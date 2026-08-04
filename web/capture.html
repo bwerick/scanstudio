@@ -268,6 +268,9 @@ async function pump() {
   reader = proc.readable.getReader();
   const canvas = new OffscreenCanvas(16, 16);
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  // Default "low" is sparse bilinear: at a 6x downscale it aliases page
+  // text into the motion signal just like sparse luma sampling did.
+  ctx.imageSmoothingQuality = "high";
   let last = 0;
   try {
     while (true) {
@@ -379,16 +382,31 @@ function analyzeFromSlot(slot) {
   const sx = init.displayWidth / aw, sy = init.displayHeight / ah;
   const lut = lumaLut(init.colorSpace);
   const gray = new Uint8Array(aw * ah);
+  // 4x4 spread samples per output pixel: 2x2 left ~3x INTER_AREA's noise
+  // floor and aliased page text into the motion signal, so a still book
+  // read as motion and settles never fired. 16 reads/px sits within ~35%
+  // of the native path's floor at half an order less work than the full
+  // block average.
+  const xs = new Int32Array(aw * 4);
+  for (let ox = 0; ox < aw; ox++) {
+    for (let k = 0; k < 4; k++) {
+      xs[ox * 4 + k] = Math.floor((ox + 0.125 + k * 0.25) * sx);
+    }
+  }
+  const rs = new Int32Array(4);
   let j = 0;
   for (let oy = 0; oy < ah; oy++) {
-    // 2x2 spread samples per output pixel: enough averaging to keep sensor
-    // noise from reading as motion, at ~4 reads/px instead of the full block.
-    const r0 = offset + Math.floor((oy + 0.25) * sy) * stride;
-    const r1 = offset + Math.floor((oy + 0.75) * sy) * stride;
+    for (let k = 0; k < 4; k++) {
+      rs[k] = offset + Math.floor((oy + 0.125 + k * 0.25) * sy) * stride;
+    }
     for (let ox = 0; ox < aw; ox++) {
-      const x0 = Math.floor((ox + 0.25) * sx);
-      const x1 = Math.floor((ox + 0.75) * sx);
-      gray[j++] = lut[(y[r0 + x0] + y[r0 + x1] + y[r1 + x0] + y[r1 + x1] + 2) >> 2];
+      const b = ox * 4;
+      let s = 8;                                    // rounding
+      for (let k = 0; k < 4; k++) {
+        const r = rs[k];
+        s += y[r + xs[b]] + y[r + xs[b + 1]] + y[r + xs[b + 2]] + y[r + xs[b + 3]];
+      }
+      gray[j++] = lut[s >> 4];
     }
   }
   sendGray(slot.ts, aw, ah, gray);
