@@ -95,6 +95,10 @@ def parse_args(argv=None):
                    help="JPEG quality for captured keyframes")
     p.add_argument("--keep-raw", action="store_true",
                    help="Keep the raw MediaRecorder file next to the normalized one")
+    p.add_argument("--verbose", action="store_true",
+                   help="Log pipeline diagnostics (the browser's twice-a-second "
+                        "stats line, every frame gap). Off by default: the log "
+                        "stays captures plus anything worth acting on")
     return p.parse_args(argv)
 
 
@@ -258,6 +262,8 @@ class WebSession:
         self.dup_dropped = 0
         self.last_stats = None       # most recent browser "stats" message
         self._lag_warned = False
+        self._queue_warned = False
+        self._gaps = 0               # long frame gaps; only the first is logged
         self.analysis_w = None
         self.analysis_h = None
 
@@ -269,6 +275,19 @@ class WebSession:
         self._raw_file = None
         self.raw_bytes = 0
         self._chunks = 0
+
+    # ── Logging ──────────────────────────────────────────────
+
+    def vlog(self, msg):
+        """Per-message diagnostics — only under --verbose.
+
+        A scan runs for minutes and the browser reports twice a second, so
+        anything logged per message buries the lines that matter (captures,
+        warnings) at roughly 100:1. The numbers still reach metadata.json via
+        last_stats, and the conditions worth acting on warn once each.
+        """
+        if self.cfg.verbose:
+            log(msg)
 
     # ── Outbound ─────────────────────────────────────────────
 
@@ -323,13 +342,22 @@ class WebSession:
             # message sat behind the socket's frame/chunk backlog.
             lag_s = max(0.0, time.time() - m.get("epoch_ms", 0) / 1000.0)
             self.last_stats = m
-            log(f"  [stats] cam {m.get('cam_fps')} fps · "
-                f"proc {m.get('proc_ms')} ms/frame · "
-                f"frame-ts step {m.get('ts_delta_ms')} ms · "
-                f"skipped {m.get('skipped')} · "
-                f"ws buffered {m.get('buffered', 0) / 1e6:.1f} MB · "
-                f"chunk queue {m.get('chunk_q', 0) / 1e6:.1f} MB · "
-                f"ring {m.get('ring_mode')} · socket lag {lag_s:.2f} s")
+            self.vlog(f"  [stats] cam {m.get('cam_fps')} fps · "
+                      f"proc {m.get('proc_ms')} ms/frame · "
+                      f"frame-ts step {m.get('ts_delta_ms')} ms · "
+                      f"skipped {m.get('skipped')} · "
+                      f"ws buffered {m.get('buffered', 0) / 1e6:.1f} MB · "
+                      f"chunk queue {m.get('chunk_q', 0) / 1e6:.1f} MB · "
+                      f"ring {m.get('ring_mode')} · socket lag {lag_s:.2f} s")
+            # The queue is the one number the quiet path would otherwise lose:
+            # the browser shows it past 8 MB, but the operator is looking at the
+            # book, not the tab. Warn once, well past "briefly behind".
+            if m.get("chunk_q", 0) > 64e6 and not self._queue_warned:
+                self._queue_warned = True
+                log(f"  WARNING: {m['chunk_q'] / 1e6:.0f} MB of recording is "
+                    "still queued in the browser. It uploads whenever the link "
+                    "goes idle and drains fully at Finish (Q) — leave the tab "
+                    "open until it says so.")
             if lag_s > 3 and not self._lag_warned:
                 self._lag_warned = True
                 log(f"  WARNING: browser messages arrive {lag_s:.0f}s late — the "
@@ -385,8 +413,16 @@ class WebSession:
         # any capture landing in the gap resolves to a frame that exists.
         span = index - self._last_index
         if span - 1 > self.cfg.fps:
-            log(f"  WARNING: {span - 1} frames missing before index {index} "
-                f"(~{(span - 1) / self.cfg.fps:.1f}s)")
+            # A bad link gaps continuously, so only the first one gets a line;
+            # the rest are counted and land in the session summary.
+            self._gaps += 1
+            if self._gaps == 1:
+                log(f"  WARNING: {span - 1} frames missing before index {index} "
+                    f"(~{(span - 1) / self.cfg.fps:.1f}s) — further gaps are "
+                    "counted and reported at the end")
+            else:
+                self.vlog(f"  WARNING: {span - 1} frames missing before index "
+                          f"{index} (~{(span - 1) / self.cfg.fps:.1f}s)")
         self.gap_filled += span - 1
         self.frames_seen += 1
         for idx in range(max(index - span + 1, index - 95), index + 1):
@@ -467,10 +503,11 @@ class WebSession:
 
         total_frames = self._last_index + 1
         det, cfg, paths = self.det, self.cfg, self.paths
+        gaps = f", {self._gaps} long gaps" if self._gaps else ""
         log(f"  Session over: {total_frames} timeline frames "
             f"({self.frames_seen} received, {self.gap_filled} gap-filled, "
-            f"{self.dup_dropped} duplicates), {len(self.keyframes)} keyframes, "
-            f"{self.raw_bytes / 1e6:.1f} MB recorded")
+            f"{self.dup_dropped} duplicates{gaps}), {len(self.keyframes)} "
+            f"keyframes, {self.raw_bytes / 1e6:.1f} MB recorded")
 
         np.save(str(paths.data / "motion_signal.npy"), det.motion_signal())
         np.save(str(paths.data / "smoothed_signal.npy"), det.smoothed_signal())
@@ -496,6 +533,7 @@ class WebSession:
             "web": {
                 "frames_received": self.frames_seen,
                 "gap_filled": self.gap_filled,
+                "long_gaps": self._gaps,
                 "duplicates_dropped": self.dup_dropped,
                 "recorder_mime": self.camera.get("mime"),
                 "recorder_chunks": self._chunks,

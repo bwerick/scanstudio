@@ -67,6 +67,10 @@ PREVIEW_HEIGHT ?= 720
 # capture and both reviews share it, since the phases run serially. One
 # ChromeOS port-forwarding rule covers the whole pipeline.
 PORT          ?= 8412
+# VERBOSE=1 adds live-web's pipeline diagnostics (per-message camera/socket
+# stats) to the log. Default keeps it to captures and warnings.
+VERBOSE       ?=
+VERBOSE_FLAG  := $(if $(strip $(VERBOSE)),--verbose,)
 
 .PHONY: all bw live live-web finish finish-web motion peaks keyframes review review-web crop split page-review page-review-web binarize pdf pdf-bw clean install install-legacy tkinter ffmpeg probe-camera test help
 
@@ -148,7 +152,7 @@ endif
 	@mkdir -p recordings
 	$(PYTHON) $(SCRIPTS)/p0_web_capture.py output/$(NAME) recordings/$(NAME).mp4 \
 		--port $(PORT) --settle-threshold $(SETTLE) --turn-threshold $(TURN) \
-		--settle-time $(SETTLE_TIME)
+		--settle-time $(SETTLE_TIME) $(VERBOSE_FLAG)
 	@echo "Live capture done. Continue with: make finish-web VIDEO=recordings/$(NAME).mp4"
 
 bw: binarize pdf-bw
