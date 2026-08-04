@@ -105,6 +105,9 @@ def test_p4_state_actions_confirm_and_save():
         assert len(state["keyframes"]) == 3
         sig = read_until(ws, "signal")
         assert sig["video"] is False and len(sig["smoothed"]) == 100
+        # The consensus vote runs off the connect path; a second state is
+        # pushed when it lands, and only then does geometry resolve.
+        read_until(ws, "state")
 
         # Frame geometry resolves (consensus voted from the 3 frames).
         send(ws, {"type": "show", "idx": 0})

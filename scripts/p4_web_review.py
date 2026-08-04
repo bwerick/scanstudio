@@ -108,12 +108,16 @@ class ReviewSession:
         )
         self.video_path = self._find_video(args.video_path)
 
+        # The consensus vote (and with it the first watchdog scan) runs in
+        # the background AFTER the first state reaches the browser. On a
+        # fresh session the vote is seconds of 4K mask work — and the
+        # U^2-Net backstop's first-ever use downloads its model — so voting
+        # on the connect path left the operator staring at an empty page.
+        # Until the vote lands, frames without their own box render with no
+        # overlay rather than paying the per-frame auto-crop fallback.
         self._consensus = None
-        if self.mode == "double":
-            self._consensus = consensus_geometry(
-                paths.images, self.keyframes,
-                cache_path=paths.json / "consensus_geometry.json", log_fn=log,
-            )
+        self._consensus_done = self.mode != "double"
+        self._closed = False
 
         self.actions = {}
         self.validated = set()
@@ -195,9 +199,31 @@ class ReviewSession:
             "smoothed": [round(float(v), 2) for v in self.smoothed],
         })
         if self.mode == "double":
-            self._start_watchdog()
+            threading.Thread(target=self._init_geometry, daemon=True).start()
+
+    def _init_geometry(self):
+        """Vote the consensus box off the connect path, then start tracking.
+
+        Cached in json/ after the first run, so only a fresh project pays
+        the vote. The state push at the end makes the browser re-request the
+        current frame, whose geometry now resolves against the consensus.
+        """
+        try:
+            self._consensus = consensus_geometry(
+                self.paths.images, self.keyframes,
+                cache_path=self.paths.json / "consensus_geometry.json",
+                log_fn=log,
+            )
+        finally:
+            self._consensus_done = True
+        self._geom_cache.clear()
+        if self._closed:
+            return
+        self.send(self._state_msg())
+        self._start_watchdog()
 
     def close(self):
+        self._closed = True
         self._stop_watchdog()
 
     # ── Inbound ──────────────────────────────────────────────
@@ -281,6 +307,13 @@ class ReviewSession:
             if quad is None and self._consensus:
                 quad = self._consensus["quad"]
                 box_src = "consensus"
+            if quad is None and not self._consensus_done:
+                # Vote still running: show the frame with no overlay now
+                # rather than paying the slow per-frame auto crop; the
+                # post-vote state push makes the browser re-request this
+                # frame (and the vote clears this cached None).
+                self._geom_cache[idx] = None
+                return None
             frac = kf.get("gutter")
             cropped = None
             if quad is not None:
@@ -473,6 +506,11 @@ class ReviewSession:
                 quad, src = tq, "track"
         if quad is None and self._consensus:
             quad, src = self._consensus["quad"], "consensus"
+        if quad is None and not self._consensus_done:
+            self.send({"type": "notice",
+                       "text": "still measuring session geometry — "
+                               "try G again in a moment"})
+            return
         if quad is not None:
             quad_px = np.array([[x * w, y * h] for x, y in quad],
                                dtype=np.float32)
