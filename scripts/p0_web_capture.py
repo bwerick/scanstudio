@@ -63,7 +63,11 @@ MSG_CHUNK = 3    # [u8 3][u32 seq][MediaRecorder chunk bytes]     browser -> ser
 _FRAME_HDR = struct.Struct("<dHH")
 
 TIMESLICE_MS = 1000       # MediaRecorder chunk interval
-RING_SLACK = 8            # extra full-res frames the browser keeps beyond settle
+# Extra full-res frames the browser rings beyond settle_frames, covering the
+# round trip between an analysis frame landing here and a capture request
+# arriving there. The ring holds *copies* (~12 MB each at 4K), so this is a
+# memory knob, not a camera-buffer-pool one; localhost RTT is ~1 frame.
+RING_SLACK = 4
 
 
 def parse_args(argv=None):
@@ -118,10 +122,12 @@ def normalize_recording(raw_path, out_path, fps, use_ffmpeg=None):
     # constant-rate timeline catches up with the next frame's timestamp. If the
     # backend reports no timestamps (POS_MSEC stuck at 0) this degrades to a
     # straight copy, which is still better than nothing.
+    log("  (no ffmpeg — using OpenCV, which software-encodes and is slow at 4K;"
+        " `make install` sets up ffmpeg)")
     cap = cv2.VideoCapture(str(raw_path))
     if not cap.isOpened():
         return "failed: OpenCV cannot read the raw recording"
-    writer, prev, out_n = None, None, 0
+    writer, prev, out_n, next_report = None, None, 0, 900
     while True:
         t_ms = cap.get(cv2.CAP_PROP_POS_MSEC)   # time of the frame about to decode
         ok, frame = cap.read()
@@ -140,6 +146,9 @@ def normalize_recording(raw_path, out_path, fps, use_ffmpeg=None):
         writer.write(frame)
         out_n += 1
         prev = frame
+        if out_n >= next_report:
+            log(f"    ...{out_n} frames ({out_n / fps:.0f}s of video)")
+            next_report += 900
     cap.release()
     if writer is None:
         return "failed: raw recording has no frames"
@@ -236,6 +245,9 @@ class WebSession:
             fi = m.get("frame_index")
             self.pending.pop(fi, None)
             log(f"  WARNING: browser no longer had frame {fi}; capture dropped")
+            self.send({"type": "notice",
+                       "text": f"Capture at frame {fi} was lost — "
+                               "press C to retake once the page is steady"})
         elif t == "finish":
             self.finish()
 
@@ -262,6 +274,11 @@ class WebSession:
         index = int(round((ts_us - self._t0_us) * self.cfg.fps / 1e6))
         if index <= self._last_index:
             self.dup_dropped += 1
+            if self.dup_dropped == 30:
+                log("  WARNING: many frames collapsing onto the same timeline "
+                    "index — the browser's frame timestamps may not be "
+                    "microseconds, or the camera runs far below "
+                    f"{self.cfg.fps:g} fps")
             return
         if self.analysis_w is None:
             self.analysis_h, self.analysis_w = gray.shape
@@ -374,20 +391,7 @@ class WebSession:
             json.dumps(det.spreads(total_frames), indent=2))
         (paths.json / "keyframes.json").write_text(json.dumps(self.keyframes, indent=2))
 
-        if self.raw_path is not None:
-            self.send({"type": "normalizing"})
-            log(f"  Normalizing recording to CFR {cfg.fps:g} fps -> {cfg.video_out}")
-            status = normalize_recording(self.raw_path, cfg.video_out, cfg.fps)
-            log(f"  Normalize: {status}")
-            if status.startswith("ok") and not cfg.keep_raw:
-                self.raw_path.unlink(missing_ok=True)
-                raw_note = "removed after normalize"
-            else:
-                raw_note = str(self.raw_path)
-        else:
-            status = "no recording received"
-            raw_note = None
-
+        status = "in progress" if self.raw_path is not None else "no recording received"
         metadata = {
             "video_path": str(cfg.video_out),
             "fps": cfg.fps,
@@ -407,10 +411,27 @@ class WebSession:
                 "recorder_mime": self.camera.get("mime"),
                 "recorder_chunks": self._chunks,
                 "normalize": status,
-                "raw_recording": raw_note,
+                "raw_recording": str(self.raw_path) if self.raw_path else None,
             },
         }
-        (paths.json / "metadata.json").write_text(json.dumps(metadata, indent=2))
+        meta_path = paths.json / "metadata.json"
+        # Written before the normalize, which can run for minutes on a 4K
+        # session — a Ctrl-C mid-encode must not cost the scan its metadata.
+        meta_path.write_text(json.dumps(metadata, indent=2))
+
+        if self.raw_path is not None:
+            self.send({"type": "normalizing"})
+            log(f"  Normalizing recording to CFR {cfg.fps:g} fps -> {cfg.video_out}")
+            status = normalize_recording(self.raw_path, cfg.video_out, cfg.fps)
+            log(f"  Normalize: {status}")
+            if status.startswith("ok") and not cfg.keep_raw:
+                self.raw_path.unlink(missing_ok=True)
+                raw_note = "removed after normalize"
+            else:
+                raw_note = str(self.raw_path)
+            metadata["web"]["normalize"] = status
+            metadata["web"]["raw_recording"] = raw_note
+            meta_path.write_text(json.dumps(metadata, indent=2))
 
         self.send({"type": "finished", "keyframes": len(self.keyframes),
                    "total_frames": total_frames, "video": str(cfg.video_out),

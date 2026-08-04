@@ -154,6 +154,8 @@ def test_capture_missing_drops_the_pending_capture():
     env.s.handle_text(json.dumps({"type": "capture_missing", "frame_index": fi}))
     env.s.handle_binary(jpeg_msg(fi))     # too late — must not commit
     assert env.s.keyframes == []
+    # The operator must hear about a lost capture, not just the server log.
+    assert any(str(fi) in m["text"] for m in env.of_type("notice"))
 
 
 def test_force_before_any_frame_is_a_no_op():

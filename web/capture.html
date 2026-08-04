@@ -103,7 +103,7 @@
   <span id="state">—</span>
   <span id="paused-chip">PAUSED</span>
   <div id="barwrap"><div id="bar"></div></div>
-  <span id="stats">motion <span id="motion">0.0</span> · lum <span id="lum">0</span></span>
+  <span id="stats">motion <span id="motion">0.0</span> · lum <span id="lum">0</span> · <span id="fps">— fps</span></span>
   <span>captured: <span id="count">0</span></span>
   <span id="res"></span>
   <button id="btn-capture" title="C">Capture</button>
@@ -150,7 +150,18 @@ let paused = false, muted = false, finishing = false, done = false;
 let audioCtx = null;
 let chunkChain = Promise.resolve();   // keeps recorder chunks in send order
 let chunkSeq = 0, skippedSends = 0;
-const ring = [];                      // {ts, frame: VideoFrame}, newest last
+let fpsEma = 0;                       // EMA of ms between camera frames
+let lastFrameAt = 0;                  // performance.now() of the last frame
+
+// The ring holds *copies* of recent frames, never live VideoFrames: camera
+// frames come from a small driver buffer pool (~6 on ChromeOS's HAL3 stack),
+// and holding them stalls frame delivery for every consumer — the exact
+// "worked for a second then froze" failure. Every VideoFrame is closed within
+// one pump iteration. Preferred mode copies the raw YUV into reused
+// ArrayBuffers ("copy"); opaque frames copyTo can't read fall back to
+// ImageBitmaps ("bitmap"), which are their own GPU-side copies.
+let ringMode = null;                  // "copy" | "bitmap", decided on first frame
+const ring = [];                      // copy: {ts, buf, init} · bitmap: {ts, bitmap, w, h}
 
 // ── WebSocket ────────────────────────────────────────────────
 
@@ -177,6 +188,7 @@ function handle(m) {
     case "captured":  flash(`CAPTURED #${m.count} (${m.reason})`); setCount(m.count); ding(); break;
     case "undone":    flash(`UNDO #${m.count + 1}`); setCount(m.count); break;
     case "normalizing": setStatus("Normalizing recording — this can take a while…"); break;
+    case "notice":    flash("CAPTURE MISSED"); setStatus(m.text); break;
     case "finished":  showSummary(m); break;
     case "error":     fatal(m.message); break;
   }
@@ -209,7 +221,9 @@ async function start() {
   const mime = pickMime();
   recorder = new MediaRecorder(stream, {
     mimeType: mime,
-    videoBitsPerSecond: Math.round(s.width * s.height * cfg.fps * 0.12),
+    // ~17 Mbps at 4K30 — plenty for mostly-still book pages, and roughly
+    // halves the WebSocket load versus a generic-content bitrate.
+    videoBitsPerSecond: Math.round(s.width * s.height * cfg.fps * 0.07),
   });
   recorder.ondataavailable = e => {
     if (!e.data.size) return;
@@ -225,6 +239,20 @@ async function start() {
   recorder.start(cfg.timeslice_ms);
   setStatus(`Recording (${mime})`);
   pump();
+  // Camera-delivery health, refreshed out of band: a stalled pump or a backed-
+  // up socket shows up here instead of as silent stillness.
+  setInterval(() => {
+    if (done || finishing) return;
+    if (lastFrameAt && performance.now() - lastFrameAt > 2000) {
+      $("fps").textContent = "CAMERA STALLED";
+      $("fps").style.color = "var(--err)";
+      return;
+    }
+    $("fps").style.color = "";
+    const f = fpsEma ? (1000 / fpsEma).toFixed(1) : "—";
+    $("fps").textContent = skippedSends
+      ? `${f} fps · ${skippedSends} dropped` : `${f} fps`;
+  }, 1000);
 }
 
 function pickMime() {
@@ -240,17 +268,55 @@ async function pump() {
   reader = proc.readable.getReader();
   const canvas = new OffscreenCanvas(16, 16);
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  let last = 0;
   try {
     while (true) {
       const { value: frame, done: eos } = await reader.read();
       if (eos) break;
-      ring.push({ ts: frameTs(frame), frame });
-      while (ring.length > cfg.ring) ring.shift().frame.close();
-      analyze(frame, canvas, ctx);
+      const now = performance.now();
+      if (last) fpsEma = fpsEma ? fpsEma * 0.9 + (now - last) * 0.1 : now - last;
+      last = lastFrameAt = now;
+      try {
+        // Ring first: a capture request can arrive the moment the analysis
+        // frame lands server-side, and must find this frame already copied.
+        await ringPush(frame);
+        analyze(frame, canvas, ctx);
+      } finally {
+        frame.close();          // always, same iteration — see ring comment
+      }
     }
   } catch (e) {
     if (!finishing) setStatus(`Analysis stopped: ${e.message}`);
   }
+}
+
+async function ringPush(frame) {
+  const ts = frameTs(frame);
+  if (ringMode !== "bitmap" && frame.format) {
+    try {
+      const size = frame.allocationSize();
+      const slot = ring.length >= cfg.ring ? ring.shift() : {};   // reuse buffers
+      if (!slot.buf || slot.buf.byteLength < size) slot.buf = new ArrayBuffer(size);
+      const layout = await frame.copyTo(slot.buf);
+      slot.ts = ts;
+      slot.init = { format: frame.format, codedWidth: frame.codedWidth,
+                    codedHeight: frame.codedHeight, timestamp: frame.timestamp,
+                    layout, visibleRect: frame.visibleRect,
+                    displayWidth: frame.displayWidth,
+                    displayHeight: frame.displayHeight,
+                    colorSpace: frame.colorSpace };
+      ring.push(slot);
+      ringMode = "copy";
+      return;
+    } catch (e) {
+      if (ringMode === "copy") throw e;   // worked before — a real error
+    }
+  }
+  ringMode = "bitmap";
+  const w = frame.displayWidth, h = frame.displayHeight;
+  const bitmap = await createImageBitmap(frame);
+  ring.push({ ts, bitmap, w, h });
+  while (ring.length > cfg.ring) ring.shift().bitmap?.close();
 }
 
 function frameTs(frame) {
@@ -287,12 +353,25 @@ function analyze(frame, canvas, ctx) {
 async function sendFullRes(m) {
   const item = ring.find(r => r.ts === m.ts_us);
   if (!item) { send({ type: "capture_missing", frame_index: m.frame_index }); return; }
-  const f = item.frame;
-  const canvas = new OffscreenCanvas(f.displayWidth, f.displayHeight);
-  canvas.getContext("2d").drawImage(f, 0, 0);   // sync, before f can age out
-  const blob = await canvas.convertToBlob(
-    { type: "image/jpeg", quality: cfg.jpeg_quality / 100 });
-  sendTagged(2, m.frame_index, await blob.arrayBuffer());
+  try {
+    let source, w, h;
+    if (item.bitmap) {
+      source = item.bitmap; w = item.w; h = item.h;
+    } else {
+      // VideoFrame(data, init) copies, so the slot can be reused underneath us.
+      source = new VideoFrame(item.buf, item.init);
+      w = item.init.displayWidth; h = item.init.displayHeight;
+    }
+    const canvas = new OffscreenCanvas(w, h);
+    canvas.getContext("2d").drawImage(source, 0, 0, w, h);   // sync: before any await
+    if (!item.bitmap) source.close();
+    const blob = await canvas.convertToBlob(
+      { type: "image/jpeg", quality: cfg.jpeg_quality / 100 });
+    sendTagged(2, m.frame_index, await blob.arrayBuffer());
+  } catch (e) {
+    send({ type: "capture_missing", frame_index: m.frame_index });
+    setStatus(`Capture failed: ${e.message}`);
+  }
 }
 
 function sendTagged(tag, u32, bytes) {
@@ -322,7 +401,7 @@ async function finishSession() {
 
 function showSummary(m) {
   done = true;
-  ring.forEach(r => r.frame.close());
+  ring.forEach(r => r.bitmap?.close());
   ring.length = 0;
   $("summary-body").textContent =
     `${m.keyframes} keyframes over ${m.total_frames} frames · ` +
