@@ -271,14 +271,45 @@ async function pump() {
   // Default "low" is sparse bilinear: at a 6x downscale it aliases page
   // text into the motion signal just like sparse luma sampling did.
   ctx.imageSmoothingQuality = "high";
-  let last = 0;
+
+  // Reader and processor are split on purpose. Awaiting the ring copy +
+  // analysis before the next read lets a standing queue build upstream the
+  // moment per-frame cost reaches the frame interval — and a standing queue
+  // never drains once the two rates match, so its depth becomes a constant
+  // lag on everything downstream: the HUD, the detector, the captures.
+  // Draining eagerly and keeping only the newest unprocessed frame bounds
+  // that lag at one processing interval; frames superseded before the
+  // processor got to them are closed and counted, and the server spans the
+  // timeline gap they leave (see _on_frame), so nothing downstream skews.
+  let pending = null, wake = null, eos = false, last = 0;
+  (async () => {
+    try {
+      while (true) {
+        const { value: frame, done } = await reader.read();
+        if (done) break;
+        const now = performance.now();
+        if (last) fpsEma = fpsEma ? fpsEma * 0.9 + (now - last) * 0.1 : now - last;
+        last = lastFrameAt = now;
+        if (pending) { pending.close(); skippedSends++; }
+        pending = frame;
+        if (wake) { wake(); wake = null; }
+      }
+    } catch (e) {
+      if (!finishing) setStatus(`Camera stopped: ${e.message}`);
+    }
+    eos = true;
+    if (wake) { wake(); wake = null; }
+  })();
+
   try {
     while (true) {
-      const { value: frame, done: eos } = await reader.read();
-      if (eos) break;
-      const now = performance.now();
-      if (last) fpsEma = fpsEma ? fpsEma * 0.9 + (now - last) * 0.1 : now - last;
-      last = lastFrameAt = now;
+      if (pending === null) {
+        if (eos) break;
+        await new Promise(r => { wake = r; });
+        continue;
+      }
+      const frame = pending;
+      pending = null;
       try {
         // Ring first: a capture request can arrive the moment the analysis
         // frame lands server-side, and must find this frame already copied.
@@ -387,26 +418,26 @@ function analyzeFromSlot(slot) {
   // read as motion and settles never fired. 16 reads/px sits within ~35%
   // of the native path's floor at half an order less work than the full
   // block average.
-  const xs = new Int32Array(aw * 4);
+  const x0 = new Int32Array(aw), x1 = new Int32Array(aw),
+        x2 = new Int32Array(aw), x3 = new Int32Array(aw);
   for (let ox = 0; ox < aw; ox++) {
-    for (let k = 0; k < 4; k++) {
-      xs[ox * 4 + k] = Math.floor((ox + 0.125 + k * 0.25) * sx);
-    }
+    x0[ox] = Math.floor((ox + 0.125) * sx);
+    x1[ox] = Math.floor((ox + 0.375) * sx);
+    x2[ox] = Math.floor((ox + 0.625) * sx);
+    x3[ox] = Math.floor((ox + 0.875) * sx);
   }
-  const rs = new Int32Array(4);
   let j = 0;
   for (let oy = 0; oy < ah; oy++) {
-    for (let k = 0; k < 4; k++) {
-      rs[k] = offset + Math.floor((oy + 0.125 + k * 0.25) * sy) * stride;
-    }
+    const r0 = offset + Math.floor((oy + 0.125) * sy) * stride;
+    const r1 = offset + Math.floor((oy + 0.375) * sy) * stride;
+    const r2 = offset + Math.floor((oy + 0.625) * sy) * stride;
+    const r3 = offset + Math.floor((oy + 0.875) * sy) * stride;
     for (let ox = 0; ox < aw; ox++) {
-      const b = ox * 4;
-      let s = 8;                                    // rounding
-      for (let k = 0; k < 4; k++) {
-        const r = rs[k];
-        s += y[r + xs[b]] + y[r + xs[b + 1]] + y[r + xs[b + 2]] + y[r + xs[b + 3]];
-      }
-      gray[j++] = lut[s >> 4];
+      const a = x0[ox], b = x1[ox], c = x2[ox], d = x3[ox];
+      gray[j++] = lut[(y[r0 + a] + y[r0 + b] + y[r0 + c] + y[r0 + d]
+                     + y[r1 + a] + y[r1 + b] + y[r1 + c] + y[r1 + d]
+                     + y[r2 + a] + y[r2 + b] + y[r2 + c] + y[r2 + d]
+                     + y[r3 + a] + y[r3 + b] + y[r3 + c] + y[r3 + d] + 8) >> 4];
     }
   }
   sendGray(slot.ts, aw, ah, gray);
