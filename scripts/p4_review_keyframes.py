@@ -76,6 +76,7 @@ import tkinter as tk
 from tkinter import messagebox
 from PIL import Image, ImageTk
 
+from corner_net import model_gutter_frac, model_quad_offsets
 from utils import (
     log,
     ProjectPaths,
@@ -1070,8 +1071,11 @@ class ReviewApp:
                 box_src = "auto"
             if frac is None:
                 # No own override: track the spine near the inherited prior
-                # (the nearest earlier correction), else fall back to full auto.
+                # (the nearest earlier correction), else the corner model's
+                # spine when a model exists, else fall back to full auto.
                 prior = resolve_gutter(self.keyframes, idx)
+                if prior is None:
+                    prior = model_gutter_frac(img, box)
                 frac = detect_gutter(cropped, prior=prior) / max(1, cropped.shape[1])
             tl, tr, br, bl = box
             geom = {
@@ -1160,6 +1164,9 @@ class ReviewApp:
             self._split_box_src = "auto"
         self._split_box_dirty = False
         prior = resolve_gutter(self.keyframes, idx - 1) if idx > 0 else None
+        if prior is None:
+            box = [[x / w, y / h] for x, y in self._quad_from_rect()]
+            prior = model_gutter_frac(img, box)
         self._split_auto_gutter = detect_gutter(cropped, prior=prior) / max(
             1, cropped.shape[1]
         )
@@ -1813,6 +1820,7 @@ class ReviewApp:
         walk the box away from a static book."""
         anchor_key, anchor, window = None, None, []
         quad0 = bases0 = axes = anchor_s = None
+        anchor_model = False
         shift_uv = [0.0, 0.0]  # applied translation, anchor-axis components
         for idx, kf in enumerate(kfs):
             if self._watch_gen != gen:
@@ -1827,6 +1835,7 @@ class ReviewApp:
             if a_idx != anchor_key:
                 anchor_key, anchor, window = a_idx, None, []
                 quad0 = None
+                anchor_model = False
                 shift_uv = [0.0, 0.0]
             if idx < from_idx:
                 continue
@@ -1842,9 +1851,15 @@ class ReviewApp:
                         anchor = "unavailable"
                     else:
                         ah, aw = aimg.shape[:2]
-                        anchor = measure_quad_offsets(
-                            aimg, np.array(quad_frac, float) * [aw, ah]
-                        )
+                        aq = np.array(quad_frac, float) * [aw, ah]
+                        # Corner model, when present, replaces the mask as
+                        # the boundary the tracker measures — but anchor and
+                        # tracked frames must use the *same* source, so its
+                        # per-session bias cancels in the difference.
+                        anchor = model_quad_offsets(aimg, aq)
+                        anchor_model = anchor is not None
+                        if anchor is None:
+                            anchor = measure_quad_offsets(aimg, aq)
             if anchor == "unavailable":
                 continue
             if a_idx == idx:
@@ -1860,7 +1875,14 @@ class ReviewApp:
                 bases0, axes = quad_edge_bases(quad0)
                 anchor_s = [b + o for b, o in zip(bases0, anchor[0])]
             tq = quad0 + shift_uv[0] * axes[0] + shift_uv[1] * axes[1]
-            off, rel = measure_quad_offsets(img, tq)
+            if anchor_model:
+                # A rare failed inference is an unmeasured frame (flagged),
+                # never a silent fall-through to the mask: mixing sources
+                # would re-introduce the bias the anchor subtraction cancels.
+                m = model_quad_offsets(img, tq)
+                off, rel = m if m is not None else ([0.0] * 4, [False] * 4)
+            else:
+                off, rel = measure_quad_offsets(img, tq)
             bases, _ = quad_edge_bases(tq)
             window.append(([b + o for b, o in zip(bases, off)], rel))
             if len(window) > 3:

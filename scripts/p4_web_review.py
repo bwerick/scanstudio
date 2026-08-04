@@ -39,6 +39,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from corner_net import model_gutter_frac, model_quad_offsets
 from p5_crop import DEFAULT_SAFETY_MARGIN, _spread_tilt, crop_double_page, \
     crop_to_quad, detect_page_quad
 from utils import (
@@ -334,6 +335,11 @@ class ReviewSession:
                 box_src = "auto"
             if frac is None:
                 prior = resolve_gutter(self.keyframes, idx)
+                if prior is None:
+                    # No operator hint yet: the corner model's spine (when
+                    # a model exists) hints instead, and the shadow scan
+                    # refines it exactly as it would an operator's.
+                    prior = model_gutter_frac(img, box)
                 frac = detect_gutter(cropped, prior=prior) / max(
                     1, cropped.shape[1]
                 )
@@ -526,6 +532,8 @@ class ReviewSession:
             box = [[float(x) / w, float(y) / h] for x, y in quad_px]
             src = "auto"
         prior = resolve_gutter(self.keyframes, idx - 1) if idx > 0 else None
+        if prior is None:
+            prior = model_gutter_frac(img, box)
         auto_g = detect_gutter(cropped, prior=prior) / max(1, cropped.shape[1])
         own_g = kf.get("gutter")
         # Entering the editor adopts Keep, exactly like the Tk app: tuning a
@@ -772,6 +780,7 @@ class ReviewSession:
     def _watchdog_worker(self, gen, kfs, from_idx):
         anchor_key, anchor, window = None, None, []
         quad0 = bases0 = axes = anchor_s = None
+        anchor_model = False
         shift_uv = [0.0, 0.0]
         for idx, kf in enumerate(kfs):
             if self._watch_gen != gen:
@@ -786,6 +795,7 @@ class ReviewSession:
             if a_idx != anchor_key:
                 anchor_key, anchor, window = a_idx, None, []
                 quad0 = None
+                anchor_model = False
                 shift_uv = [0.0, 0.0]
             if idx < from_idx:
                 continue
@@ -801,9 +811,15 @@ class ReviewSession:
                         anchor = "unavailable"
                     else:
                         ah, aw = aimg.shape[:2]
-                        anchor = measure_quad_offsets(
-                            aimg, np.array(quad_frac, float) * [aw, ah]
-                        )
+                        aq = np.array(quad_frac, float) * [aw, ah]
+                        # Corner model, when present, replaces the mask as
+                        # the boundary the tracker measures — but anchor and
+                        # tracked frames must use the *same* source, so its
+                        # per-session bias cancels in the difference.
+                        anchor = model_quad_offsets(aimg, aq)
+                        anchor_model = anchor is not None
+                        if anchor is None:
+                            anchor = measure_quad_offsets(aimg, aq)
             if anchor == "unavailable":
                 continue
             if a_idx == idx:
@@ -818,7 +834,14 @@ class ReviewSession:
                 bases0, axes = quad_edge_bases(quad0)
                 anchor_s = [b + o for b, o in zip(bases0, anchor[0])]
             tq = quad0 + shift_uv[0] * axes[0] + shift_uv[1] * axes[1]
-            off, rel = measure_quad_offsets(img, tq)
+            if anchor_model:
+                # A rare failed inference is an unmeasured frame (flagged),
+                # never a silent fall-through to the mask: mixing sources
+                # would re-introduce the bias the anchor subtraction cancels.
+                m = model_quad_offsets(img, tq)
+                off, rel = m if m is not None else ([0.0] * 4, [False] * 4)
+            else:
+                off, rel = measure_quad_offsets(img, tq)
             bases, _ = quad_edge_bases(tq)
             window.append(([b + o for b, o in zip(bases, off)], rel))
             if len(window) > 3:
