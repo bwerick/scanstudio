@@ -31,7 +31,19 @@ IN_W, IN_H = 448, 256
 _MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 _STD = np.array([0.229, 0.224, 0.225], np.float32)
 
-MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "corner_net.onnx"
+MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
+
+
+def model_path() -> Path | None:
+    """The corner model to serve: first ``models/corner_net*.onnx`` found.
+
+    Models are named ``corner_net-<rig>.onnx`` (e.g. ``rm333-rig``, the rig
+    the repo's bundled model was trained on) — the label travels in the
+    filename and the file's ONNX metadata, and the loader stays
+    label-agnostic so a retrain for another rig needs no code change.
+    """
+    c = sorted(MODELS_DIR.glob("corner_net*.onnx"))
+    return c[0] if c else None
 
 # Same lazy-session pattern as utils' _u2net: one load attempt, failures
 # remembered, a lock because the watchdog thread and the request thread can
@@ -50,14 +62,15 @@ def _session():
         if _net["state"] == "unavailable":
             return None
         if _net["session"] is None:
-            if not MODEL_PATH.exists():
+            path = model_path()
+            if path is None:
                 _net["state"] = "unavailable"
                 return None
             try:
                 import onnxruntime as ort
 
                 _net["session"] = ort.InferenceSession(
-                    str(MODEL_PATH), providers=["CPUExecutionProvider"]
+                    str(path), providers=["CPUExecutionProvider"]
                 )
                 _net["state"] = "ready"
             except Exception:

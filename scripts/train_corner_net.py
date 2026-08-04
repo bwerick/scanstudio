@@ -31,7 +31,8 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
 DATASET = REPO / "output" / "_corner_dataset"
-MODEL_OUT = REPO / "models" / "corner_net.onnx"
+MODELS_DIR = REPO / "models"
+DEFAULT_RIG = "rm333-rig"
 
 WORK_W = 1280                 # extracted frame width
 CACHE_W, CACHE_H = 640, 360   # in-memory training cache
@@ -304,25 +305,47 @@ def lobo():
         print(f"{name}: {stats(np.concatenate(agg[k]))}")
 
 
-def final():
+def final(rig=DEFAULT_RIG):
     import torch
 
     dev = device()
     recs = load_records()
     model = train_one(recs, dev, log_prefix="[final] ")
-    MODEL_OUT.parent.mkdir(parents=True, exist_ok=True)
+    out = MODELS_DIR / f"corner_net-{rig}.onnx"
+    out.parent.mkdir(parents=True, exist_ok=True)
     model.eval().cpu()
-    torch.onnx.export(model, torch.zeros(1, 3, IN_H, IN_W), str(MODEL_OUT),
+    torch.onnx.export(model, torch.zeros(1, 3, IN_H, IN_W), str(out),
                       input_names=["image"], output_names=["out"],
                       dynamo=False)
-    print(f"saved {MODEL_OUT}", flush=True)
+    # Provenance rides inside the file: which rig, trained when, on what.
+    try:
+        import onnx
+
+        m = onnx.load(str(out))
+        books = sorted({r["book"] for r in recs})
+        for k, v in (("rig", rig),
+                     ("trained", time.strftime("%Y-%m-%d")),
+                     ("frames", str(len(recs))),
+                     ("books", ",".join(books))):
+            p = m.metadata_props.add()
+            p.key, p.value = k, v
+        onnx.save(m, str(out))
+    except ImportError:
+        pass
+    print(f"saved {out}", flush=True)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("cmd", choices=["extract", "lobo", "final"])
-    cmd = ap.parse_args().cmd
-    {"extract": extract, "lobo": lobo, "final": final}[cmd]()
+    ap.add_argument("--rig", default=DEFAULT_RIG,
+                    help="rig label baked into the model filename and "
+                         f"metadata (default: {DEFAULT_RIG})")
+    args = ap.parse_args()
+    if args.cmd == "final":
+        final(args.rig)
+    else:
+        {"extract": extract, "lobo": lobo}[args.cmd]()
 
 
 if __name__ == "__main__":
