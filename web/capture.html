@@ -148,8 +148,8 @@ const setStatus = t => { $("status").textContent = t; };
 let cfg = null, stream = null, track = null, recorder = null, reader = null;
 let paused = false, muted = false, finishing = false, done = false;
 let audioCtx = null;
-let chunkChain = Promise.resolve();   // keeps recorder chunks in send order
-let chunkSeq = 0, skippedSends = 0;
+let chunkQueue = [];                  // recorder chunks awaiting an idle socket
+let chunkSeq = 0, skippedSends = 0, chunkBytes = 0, chunkBusy = false;
 let fpsEma = 0;                       // EMA of ms between camera frames
 let lastFrameAt = 0;                  // performance.now() of the last frame
 let tsPrev = 0, tsDeltaEma = 0;       // EMA of frame.timestamp deltas (µs)
@@ -229,10 +229,9 @@ async function start() {
   });
   recorder.ondataavailable = e => {
     if (!e.data.size) return;
-    const seq = chunkSeq++;
-    chunkChain = chunkChain.then(async () => {
-      sendTagged(3, seq, await e.data.arrayBuffer());
-    });
+    chunkQueue.push({ seq: chunkSeq++, blob: e.data });
+    chunkBytes += e.data.size;
+    drainChunks();
   };
 
   send({ type: "hello", width: s.width, height: s.height,
@@ -250,10 +249,13 @@ async function start() {
       $("fps").style.color = "var(--err)";
       return;
     }
+    drainChunks();                    // retry whenever the socket has gone idle
     $("fps").style.color = "";
     const f = fpsEma ? (1000 / fpsEma).toFixed(1) : "—";
-    $("fps").textContent = skippedSends
+    let txt = skippedSends
       ? `${f} fps · ${skippedSends} dropped` : `${f} fps`;
+    if (chunkBytes > 8_000_000) txt += ` · ${(chunkBytes / 1e6).toFixed(0)} MB queued`;
+    $("fps").textContent = txt;
     // Pipeline diagnostics, logged server-side. epoch_ms rides along so the
     // server (same machine, same clock) can log the socket's transit lag —
     // this message queues behind any frame/chunk backlog by design.
@@ -264,6 +266,7 @@ async function start() {
              ts_delta_ms: +(tsDeltaEma / 1000).toFixed(1),
              skipped: skippedSends,
              buffered: ws.bufferedAmount,
+             chunk_q: chunkBytes,
              ring_mode: ringMode });
     }
   }, 1000);
@@ -387,9 +390,51 @@ function frameTs(frame) {
 function overloaded() {
   // Drop (rather than queue) when the socket is backed up; the server
   // spans missing timeline slots, so a dropped analysis frame degrades
-  // gracefully while an unbounded send queue would not.
-  if (ws.readyState !== 1 || ws.bufferedAmount > 8_000_000) { skippedSends++; return true; }
+  // gracefully while an unbounded send queue would not. The gate is ~3
+  // frames: everything the detector sees was on the wire moments ago, so
+  // on a thin link (a forwarded port relaying over SSH or a VM boundary)
+  // the analysis simply runs at fewer fps instead of seconds behind.
+  if (ws.readyState !== 1 || ws.bufferedAmount > 700_000) { skippedSends++; return true; }
   return false;
+}
+
+// The recording shares the socket with the analysis stream, but only the
+// analysis is live: a chunk transmitted ahead of fresh frames adds its whole
+// transit time to every downstream latency — the HUD, the captures, even the
+// pause button's ack. So chunks wait (Chrome pages Blobs to disk, so the
+// queue costs no memory) and go out only when the socket is idle; finish()
+// flushes the remainder once the camera has stopped and the pipe is free.
+const SOCKET_IDLE = 256 * 1024;
+
+function socketDrained(limit) {
+  return new Promise(res => {
+    const poll = () => (ws.bufferedAmount < limit || ws.readyState !== 1)
+      ? res() : setTimeout(poll, 100);
+    poll();
+  });
+}
+
+async function drainChunks(flush = false) {
+  if (chunkBusy) {
+    if (!flush) return;
+    while (chunkBusy) await new Promise(r => setTimeout(r, 50));
+  }
+  chunkBusy = true;
+  try {
+    while (chunkQueue.length && ws.readyState === 1 &&
+           (flush || ws.bufferedAmount < SOCKET_IDLE)) {
+      const item = chunkQueue[0];
+      sendTagged(3, item.seq, await item.blob.arrayBuffer());
+      chunkQueue.shift();
+      chunkBytes -= item.blob.size;
+      if (flush) {
+        setStatus(`Uploading recording… ${(chunkBytes / 1e6).toFixed(0)} MB left`);
+        await socketDrained(4_000_000);   // keep the flush pipelined, not ballooning
+      }
+    }
+  } finally {
+    chunkBusy = false;
+  }
 }
 
 function sendGray(ts, aw, ah, gray) {
@@ -565,7 +610,8 @@ async function finishSession() {
   if (recorder && recorder.state !== "inactive") {
     await new Promise(res => { recorder.onstop = res; recorder.stop(); });
   }
-  await chunkChain;                    // last chunk on the wire before finish
+  await drainChunks(true);             // whole recording on the wire before finish
+  await socketDrained(1);              // ... and actually delivered to the kernel
   track.stop();
   send({ type: "finish" });
   setStatus("Saving…");

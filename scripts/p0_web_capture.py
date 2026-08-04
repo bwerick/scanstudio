@@ -257,6 +257,7 @@ class WebSession:
         self.gap_filled = 0
         self.dup_dropped = 0
         self.last_stats = None       # most recent browser "stats" message
+        self._lag_warned = False
         self.analysis_w = None
         self.analysis_h = None
 
@@ -327,7 +328,15 @@ class WebSession:
                 f"frame-ts step {m.get('ts_delta_ms')} ms · "
                 f"skipped {m.get('skipped')} · "
                 f"ws buffered {m.get('buffered', 0) / 1e6:.1f} MB · "
+                f"chunk queue {m.get('chunk_q', 0) / 1e6:.1f} MB · "
                 f"ring {m.get('ring_mode')} · socket lag {lag_s:.2f} s")
+            if lag_s > 3 and not self._lag_warned:
+                self._lag_warned = True
+                log(f"  WARNING: browser messages arrive {lag_s:.0f}s late — the "
+                    "route to this server (a forwarded port relaying over SSH "
+                    "or a VM boundary?) is slower than the capture stream. "
+                    "Analysis thins to what the link carries; the recording "
+                    "uploads when the link is idle and finishes at Finish (Q).")
         elif t == "capture_missing":
             fi = m.get("frame_index")
             self.pending.pop(fi, None)
