@@ -20,8 +20,9 @@ wrong moment. Normalization uses ffmpeg when available, else OpenCV.
 
 Timeline contract: the detector requires contiguous frame indices at --fps.
 Browser frames are variable-rate, so this server maps each frame's timestamp
-onto that timeline; dropped frames are gap-filled with the previous analysis
-frame (reads as stillness), duplicates are dropped, and both counts land in
+onto that timeline; a gap of dropped frames is credited with the difference
+measured across it (a page turn that fell into a drop still changed the page,
+so it still reads as motion), duplicates are dropped, and both counts land in
 metadata.json.
 
 Usage:
@@ -187,8 +188,6 @@ class WebSession:
 
         self._t0_us = None           # timestamp anchoring index 0
         self._last_index = -1
-        self._prev_gray = None       # last real frame, reused for gap fill
-        self._last_real_ts = None
         self._ts_by_index = {}       # index -> browser timestamp (for captures)
 
         self.raw_path = None
@@ -241,6 +240,8 @@ class WebSession:
         elif t == "hidden":
             log("  WARNING: tab hidden — frame delivery may stall; "
                 "keep the capture tab visible while scanning")
+        elif t == "capture_note":
+            log(f"  NOTE from browser: {m.get('text')}")
         elif t == "capture_missing":
             fi = m.get("frame_index")
             self.pending.pop(fi, None)
@@ -282,36 +283,29 @@ class WebSession:
             return
         if self.analysis_w is None:
             self.analysis_h, self.analysis_w = gray.shape
-        # Fill dropped frames with the previous frame so the timeline stays
-        # contiguous. A filled frame diffs to zero motion — stillness — which
-        # is the honest reading for the odd dropped frame this absorbs. Filled
-        # frames get no tick (nothing new for the HUD) and inherit the last
-        # real timestamp, so a capture landing on one still resolves.
-        gap = index - self._last_index - 1
-        if gap > self.cfg.fps:
-            log(f"  WARNING: {gap} frames missing before index {index} "
-                f"(~{gap / self.cfg.fps:.1f}s) — gap-filled as stillness")
-        while self._last_index + 1 < index and self._prev_gray is not None:
-            self.gap_filled += 1
-            self._tick(self._last_index + 1, self._prev_gray, self._last_real_ts,
-                       filled=True)
+        # This frame stands for every timeline slot since the last one: the
+        # detector credits the whole gap with the difference measured across
+        # it (see LiveDetector.update), so dropped frames never read as
+        # fabricated stillness. Every slot maps to this frame's timestamp —
+        # any capture landing in the gap resolves to a frame that exists.
+        span = index - self._last_index
+        if span - 1 > self.cfg.fps:
+            log(f"  WARNING: {span - 1} frames missing before index {index} "
+                f"(~{(span - 1) / self.cfg.fps:.1f}s)")
+        self.gap_filled += span - 1
         self.frames_seen += 1
-        self._prev_gray = gray
-        self._last_real_ts = ts_us
-        self._tick(index, gray, ts_us)
-
-    def _tick(self, index, gray, ts_us, filled=False):
-        self._last_index = index
-        self._ts_by_index[index] = ts_us
+        for idx in range(max(index - span + 1, index - 95), index + 1):
+            self._ts_by_index[idx] = ts_us
         if len(self._ts_by_index) > 192:
             for k in [k for k in self._ts_by_index if k < index - 96]:
                 del self._ts_by_index[k]
-        tick = self.det.update(index, gray)
-        if not filled:
-            self.send({"type": "tick", "frame_index": index, "state": tick.state,
-                       "motion": round(tick.motion, 2), "smooth": round(tick.smooth, 2),
-                       "brightness": round(tick.brightness, 1),
-                       "captured": len(self.keyframes), "paused": self.det.paused})
+        self._last_index = index
+
+        tick = self.det.update(index, gray, span=span)
+        self.send({"type": "tick", "frame_index": index, "state": tick.state,
+                   "motion": round(tick.motion, 2), "smooth": round(tick.smooth, 2),
+                   "brightness": round(tick.brightness, 1),
+                   "captured": len(self.keyframes), "paused": self.det.paused})
         if tick.capture is not None:
             self._request_pixels(tick.capture)
 

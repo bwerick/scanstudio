@@ -129,8 +129,8 @@ class LiveDetector:
     ``peaks.npy``, ``spreads.json``) are all keyed to a constant-rate timeline
     at ``fps``. A variable-rate source — anything driven by a browser's frame
     callbacks rather than a file — must map its timestamps onto that timeline
-    and fill gaps *before* calling update, or the signal silently stops lining
-    up with the recording it is supposed to describe.
+    and cover dropped frames via ``update(..., span=k)``, or the signal
+    silently stops lining up with the recording it is supposed to describe.
     """
 
     def __init__(self, fps=30.0, settle_threshold=2.0, turn_threshold=5.0,
@@ -155,42 +155,60 @@ class LiveDetector:
 
     # ── Driving ──────────────────────────────────────────────
 
-    def update(self, frame_index, gray) -> Tick:
-        """Advance one frame. ``gray`` is the analysis-resolution grayscale frame."""
+    def update(self, frame_index, gray, span=1) -> Tick:
+        """Advance the timeline to ``frame_index``. ``gray`` is the
+        analysis-resolution grayscale frame.
+
+        ``span`` is how many timeline slots this frame stands for — 1 for a
+        source that delivers every frame (the local capture loop). A
+        variable-rate source that dropped ``span - 1`` frames since the last
+        update passes the count instead of pretending the book sat still: the
+        measured difference between this frame and the previous one is
+        credited to every slot in the gap. A page turn that fell entirely into
+        dropped frames still changes the page, so the boundary difference is
+        large and the turn registers; genuine stillness across a drop diffs
+        to nothing and counts toward settling, exactly as it should.
+
+        At most one capture can fire per call: a capture requires the smoothed
+        signal to sit below settle_threshold, after which the constant
+        in-span motion value can never climb back over turn_threshold.
+        """
         motion = (float(np.mean(cv2.absdiff(self._prev, gray)))
                   if self._prev is not None else 0.0)
         self._prev = gray
-        self.motion.append(motion)
-
-        # Trailing mean over the smoothing window — the online counterpart of
-        # P1's uniform filter. Thresholding the raw per-frame difference would
-        # chatter between states on sensor noise alone.
-        win_n = min(self.smoothing_window, len(self.motion))
-        smooth = float(np.mean(self.motion[-win_n:]))
-
         sharpness = laplacian_sharpness(gray)
-        self._window.append((frame_index, sharpness))
 
-        capture = None
-        if not self.paused:
-            still = smooth < self.settle_threshold
-            self._still_run = self._still_run + 1 if still else 0
-            settled = still and self._still_run >= self.settle_frames
+        capture, smooth = None, 0.0
+        for idx in range(frame_index - span + 1, frame_index + 1):
+            self.motion.append(motion)
 
-            if self.state == WAITING:
-                if settled:
-                    capture = self._take("initial")
-                    self.state = SETTLED
-            elif self.state == SETTLED:
-                if smooth > self.turn_threshold:
-                    self.state = TURNING
-                    self._saw_turn = True
-                    self.turn_frames.append(frame_index)
-            elif self.state == TURNING:
-                if settled and self._saw_turn:
-                    capture = self._take("settle")
-                    self.state = SETTLED
-                    self._saw_turn = False
+            # Trailing mean over the smoothing window — the online counterpart
+            # of P1's uniform filter. Thresholding the raw per-frame difference
+            # would chatter between states on sensor noise alone.
+            win_n = min(self.smoothing_window, len(self.motion))
+            smooth = float(np.mean(self.motion[-win_n:]))
+
+            self._window.append((idx, sharpness))
+
+            if not self.paused:
+                still = smooth < self.settle_threshold
+                self._still_run = self._still_run + 1 if still else 0
+                settled = still and self._still_run >= self.settle_frames
+
+                if self.state == WAITING:
+                    if settled:
+                        capture = self._take("initial") or capture
+                        self.state = SETTLED
+                elif self.state == SETTLED:
+                    if smooth > self.turn_threshold:
+                        self.state = TURNING
+                        self._saw_turn = True
+                        self.turn_frames.append(idx)
+                elif self.state == TURNING:
+                    if settled and self._saw_turn:
+                        capture = self._take("settle") or capture
+                        self.state = SETTLED
+                        self._saw_turn = False
 
         return Tick(frame_index=frame_index, motion=motion, smooth=smooth,
                     brightness=float(np.mean(gray)), sharpness=sharpness,

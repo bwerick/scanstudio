@@ -126,6 +126,46 @@ def test_three_turns_give_four_captures():
     assert len(det.turn_frames) == 3
 
 
+# ── Variable-rate sources (span) ─────────────────────────────
+
+
+def test_span_one_matches_the_default_path():
+    d1, d2 = LiveDetector(**KW), LiveDetector(**KW)
+    frames = steady(0, 10) + churn(6) + steady(3, 12)
+    for i, f in enumerate(frames):
+        d1.update(i, f)
+        d2.update(i, f, span=1)
+    assert np.array_equal(d1.motion_signal(), d2.motion_signal())
+    assert d1.state == d2.state and list(d1.peaks()) == list(d2.peaks())
+
+
+def test_span_counts_stillness_toward_settling():
+    """Dropped frames of a still book still count toward the settle timer."""
+    det = LiveDetector(**KW)
+    f = still_frame(1)
+    det.update(0, f)
+    tick = det.update(7, f, span=7)      # frames 1-6 were dropped
+    assert tick.capture is not None and tick.capture.reason == "initial"
+    assert det.state == SETTLED
+    assert det.motion_signal().shape == (8,)
+
+
+def test_span_credits_the_gap_with_boundary_motion():
+    """A page turn that fell entirely into dropped frames must still register:
+    the page *changed*, so the boundary difference is large — crediting it to
+    the gap is what keeps a fast flip from reading as fabricated stillness."""
+    det = LiveDetector(**KW)
+    run(det, steady(1, 20))                          # settle -> initial capture
+    det.update(24, still_frame(2), span=5)           # flip hidden inside a drop
+    sig = det.motion_signal()
+    assert sig.shape == (25,)
+    assert np.all(sig[20:] == sig[20]) and sig[20] > KW["turn_threshold"]
+    assert det.state == TURNING and len(det.turn_frames) == 1
+
+    _, caps = run(det, [still_frame(2)] * 25, start=25)   # settle on the new page
+    assert len(caps) == 1 and caps[0].reason == "settle"
+
+
 # ── Frame selection ──────────────────────────────────────────
 
 

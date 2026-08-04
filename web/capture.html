@@ -280,7 +280,12 @@ async function pump() {
         // Ring first: a capture request can arrive the moment the analysis
         // frame lands server-side, and must find this frame already copied.
         await ringPush(frame);
-        analyze(frame, canvas, ctx);
+        const slot = ring[ring.length - 1];
+        if (slot.init && slot.init.layout && Y_FORMATS.has(slot.init.format)) {
+          analyzeFromSlot(slot);      // read luma straight out of the copy
+        } else {
+          analyze(frame, canvas, ctx);
+        }
       } finally {
         frame.close();          // always, same iteration — see ring comment
       }
@@ -323,11 +328,75 @@ function frameTs(frame) {
   return frame.timestamp ?? Math.round(performance.now() * 1000);
 }
 
-function analyze(frame, canvas, ctx) {
+function overloaded() {
   // Drop (rather than queue) when the socket is backed up; the server
-  // gap-fills missing timeline slots, so a dropped analysis frame degrades
+  // spans missing timeline slots, so a dropped analysis frame degrades
   // gracefully while an unbounded send queue would not.
-  if (ws.readyState !== 1 || ws.bufferedAmount > 8_000_000) { skippedSends++; return; }
+  if (ws.readyState !== 1 || ws.bufferedAmount > 8_000_000) { skippedSends++; return true; }
+  return false;
+}
+
+function sendGray(ts, aw, ah, gray) {
+  const buf = new ArrayBuffer(13 + gray.length);
+  const dv = new DataView(buf);
+  dv.setUint8(0, 1);
+  dv.setFloat64(1, ts, true);
+  dv.setUint16(9, aw, true);
+  dv.setUint16(11, ah, true);
+  new Uint8Array(buf, 13).set(gray);
+  ws.send(buf);
+}
+
+// Fast analysis path: planar/semi-planar YUV starts with a full-resolution
+// luma plane, which *is* the grayscale image — so the ring copy we already
+// made yields the analysis frame with plain array reads, skipping the
+// per-frame drawImage + getImageData GPU round trip that a slow Chromebook
+// can't sustain at 30 fps.
+const Y_FORMATS = new Set(["NV12", "NV21", "I420", "I420A", "I422", "I444"]);
+let _lut = null, _lutFull = null;
+
+function lumaLut(colorSpace) {
+  // Cameras deliver video-range luma (16-235); expand to full range so the
+  // signal magnitudes stay comparable with the native front end's 0-255 gray
+  // (and with the thresholds tuned against it).
+  const full = colorSpace && colorSpace.fullRange === true;
+  if (_lut && _lutFull === full) return _lut;
+  _lut = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) {
+    _lut[v] = full ? v : Math.max(0, Math.min(255, Math.round((v - 16) * 255 / 219)));
+  }
+  _lutFull = full;
+  return _lut;
+}
+
+function analyzeFromSlot(slot) {
+  if (overloaded()) return;
+  const { init, buf } = slot;
+  const ah = cfg.analysis_height;
+  const aw = Math.round(init.displayWidth * ah / init.displayHeight);
+  const y = new Uint8Array(buf);
+  const { offset, stride } = init.layout[0];        // plane 0 is always luma
+  const sx = init.displayWidth / aw, sy = init.displayHeight / ah;
+  const lut = lumaLut(init.colorSpace);
+  const gray = new Uint8Array(aw * ah);
+  let j = 0;
+  for (let oy = 0; oy < ah; oy++) {
+    // 2x2 spread samples per output pixel: enough averaging to keep sensor
+    // noise from reading as motion, at ~4 reads/px instead of the full block.
+    const r0 = offset + Math.floor((oy + 0.25) * sy) * stride;
+    const r1 = offset + Math.floor((oy + 0.75) * sy) * stride;
+    for (let ox = 0; ox < aw; ox++) {
+      const x0 = Math.floor((ox + 0.25) * sx);
+      const x1 = Math.floor((ox + 0.75) * sx);
+      gray[j++] = lut[(y[r0 + x0] + y[r0 + x1] + y[r1 + x0] + y[r1 + x1] + 2) >> 2];
+    }
+  }
+  sendGray(slot.ts, aw, ah, gray);
+}
+
+// Canvas fallback for opaque frames the fast path can't read.
+function analyze(frame, canvas, ctx) {
+  if (overloaded()) return;
   const ah = cfg.analysis_height;
   const aw = Math.round(frame.displayWidth * ah / frame.displayHeight);
   if (canvas.width !== aw || canvas.height !== ah) {
@@ -340,19 +409,42 @@ function analyze(frame, canvas, ctx) {
   for (let i = 0, j = 0; j < gray.length; i += 4, j++) {
     gray[j] = (4899 * rgba[i] + 9617 * rgba[i + 1] + 1868 * rgba[i + 2] + 8192) >> 14;
   }
-  const buf = new ArrayBuffer(13 + gray.length);
-  const dv = new DataView(buf);
-  dv.setUint8(0, 1);
-  dv.setFloat64(1, frameTs(frame), true);
-  dv.setUint16(9, aw, true);
-  dv.setUint16(11, ah, true);
-  new Uint8Array(buf, 13).set(gray);
-  ws.send(buf);
+  sendGray(frameTs(frame), aw, ah, gray);
 }
 
+// A capture request must always produce a frame: the named frame if the ring
+// still has it, else the nearest ring copy, else the live preview element.
+// The book is settled when captures fire, so a neighbour a few frames off is
+// visually the same page — losing the spread entirely never is.
 async function sendFullRes(m) {
-  const item = ring.find(r => r.ts === m.ts_us);
-  if (!item) { send({ type: "capture_missing", frame_index: m.frame_index }); return; }
+  let item = ring.find(r => r.ts === m.ts_us);
+  let note = null;
+  if (!item && ring.length) {
+    item = ring.reduce((a, b) =>
+      Math.abs(a.ts - m.ts_us) < Math.abs(b.ts - m.ts_us) ? a : b);
+    note = `frame ${m.frame_index} aged out of the ring; sent the nearest ` +
+           `copy (${((item.ts - m.ts_us) / 1000).toFixed(0)}ms off)`;
+  }
+  try {
+    let canvas = item ? drawItem(item) : null;
+    if (!canvas) {
+      const v = $("video");
+      if (!v.videoWidth) throw new Error("no frame source available");
+      canvas = new OffscreenCanvas(v.videoWidth, v.videoHeight);
+      canvas.getContext("2d").drawImage(v, 0, 0);
+      note = `frame ${m.frame_index} could not be rebuilt; sent the live view`;
+    }
+    const blob = await canvas.convertToBlob(
+      { type: "image/jpeg", quality: cfg.jpeg_quality / 100 });
+    sendTagged(2, m.frame_index, await blob.arrayBuffer());
+    if (note) send({ type: "capture_note", text: note });
+  } catch (e) {
+    send({ type: "capture_missing", frame_index: m.frame_index });
+    setStatus(`Capture failed: ${e.message}`);
+  }
+}
+
+function drawItem(item) {
   try {
     let source, w, h;
     if (item.bitmap) {
@@ -365,12 +457,21 @@ async function sendFullRes(m) {
     const canvas = new OffscreenCanvas(w, h);
     canvas.getContext("2d").drawImage(source, 0, 0, w, h);   // sync: before any await
     if (!item.bitmap) source.close();
-    const blob = await canvas.convertToBlob(
-      { type: "image/jpeg", quality: cfg.jpeg_quality / 100 });
-    sendTagged(2, m.frame_index, await blob.arrayBuffer());
+    return canvas;
   } catch (e) {
-    send({ type: "capture_missing", frame_index: m.frame_index });
-    setStatus(`Capture failed: ${e.message}`);
+    if (item.bitmap) return null;
+    try {
+      // Some platforms reject parts of the full init — retry with the minimum.
+      const { format, codedWidth, codedHeight, timestamp, layout } = item.init;
+      const source = new VideoFrame(item.buf,
+        { format, codedWidth, codedHeight, timestamp, layout });
+      const canvas = new OffscreenCanvas(codedWidth, codedHeight);
+      canvas.getContext("2d").drawImage(source, 0, 0);
+      source.close();
+      return canvas;
+    } catch (e2) {
+      return null;
+    }
   }
 }
 

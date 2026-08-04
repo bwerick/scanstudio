@@ -94,6 +94,17 @@ def test_gap_is_filled_silently_and_counted():
     assert [t["frame_index"] for t in env.of_type("tick")] == [0, 1, 11]
 
 
+def test_gap_inherits_boundary_motion_not_stillness():
+    """A page flip hidden inside dropped frames must still read as motion."""
+    env = Session()
+    env.s.handle_binary(frame_msg(0.0, still_frame(1)))
+    env.s.handle_binary(frame_msg(6 * US_PER_FRAME, still_frame(2)))
+    sig = env.s.det.motion_signal()
+    assert sig.shape == (7,)
+    assert np.all(sig[1:] == sig[1]) and sig[1] > 0
+    assert env.s.gap_filled == 5
+
+
 def test_duplicate_timestamps_are_dropped():
     env = Session()
     g = still_frame(1)
