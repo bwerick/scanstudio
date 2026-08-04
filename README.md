@@ -238,7 +238,7 @@ make review VIDEO=recordings/mybook.mp4
 
 Tkinter GUI for reviewing and correcting the keyframe selection. This phase is reentrant — run it as many times as needed before proceeding.
 
-Prefer the browser on ChromeOS (or any small screen): `make review-web VIDEO=...` serves the same review to Chrome at `http://localhost:8413` — identical state, keys, and save format, with the insert scrubber as a native `<video>` (hardware decode, instant seeking, vs. a software 4K decode per keypress in Tk). On ChromeOS forward the port first: Settings > Linux > Port forwarding.
+Prefer the browser on ChromeOS (or any small screen): `make review-web VIDEO=...` serves the same review to Chrome at `http://localhost:8412` — identical state, keys, and save format, with the insert scrubber as a native `<video>` (hardware decode, instant seeking, vs. a software 4K decode per keypress in Tk). All ScanStudio web apps share port 8412 (they run serially), so the one ChromeOS forwarding rule from `live-web` already covers this.
 
 **Keys:**
 
@@ -292,7 +292,7 @@ make page-review VIDEO=recordings/mybook.mp4
 
 Tkinter GUI for dropping bad pages, nudging a page's geometry, and marking where each document starts. Review state is saved to `json/page_review.json`; Save also applies drops, re-renders adjusted pages, and stamps document starts into `json/pages.json`.
 
-Browser version: `make page-review-web VIDEO=...` (Chrome at `http://localhost:8414`, same keys and outputs — the ChromeOS-friendly path).
+Browser version: `make page-review-web VIDEO=...` (Chrome at `http://localhost:8412` — the shared ScanStudio port — same keys and outputs; the ChromeOS-friendly path).
 
 | Key | Action |
 |-----|------|

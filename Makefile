@@ -63,7 +63,9 @@ SETTLE        ?= 2.0
 TURN          ?= 5.0
 SETTLE_TIME   ?= 0.3
 PREVIEW_HEIGHT ?= 720
-# live-web: port the capture page is served on (http://localhost:$(PORT))
+# Port every ScanStudio web app serves on (http://localhost:$(PORT)) —
+# capture and both reviews share it, since the phases run serially. One
+# ChromeOS port-forwarding rule covers the whole pipeline.
 PORT          ?= 8412
 
 .PHONY: all bw live live-web finish finish-web motion peaks keyframes review review-web crop split page-review page-review-web binarize pdf pdf-bw clean install install-legacy tkinter ffmpeg probe-camera test help
@@ -105,7 +107,7 @@ help:
 	@echo "  MODE=$(MODE)  (double=book spreads, single=loose docs)"
 	@echo "  SPLIT_DOCS=$(SPLIT_DOCS)  (auto=one PDF per document too, never=combined only)"
 	@echo "  live: CAMERA=$(CAMERA)  SETTLE=$(SETTLE)  TURN=$(TURN)  SETTLE_TIME=$(SETTLE_TIME)  PREVIEW_HEIGHT=$(PREVIEW_HEIGHT)"
-	@echo "  live-web: PORT=$(PORT)  (plus SETTLE/TURN/SETTLE_TIME above)"
+	@echo "  web apps (live-web, review-web, page-review-web): PORT=$(PORT), shared"
 
 all: motion peaks keyframes finish
 	@echo "Pipeline complete: $(PDF)"
@@ -172,7 +174,7 @@ review: $(KEYFRAMES)
 # <video> over the recording — the ChromeOS path, where Tk clips off small
 # screens and software-decodes 4K per scrub step.
 review-web: $(KEYFRAMES)
-	$(PYTHON) $(SCRIPTS)/p4_web_review.py $(OUTDIR) $(VIDEO) --mode $(MODE)
+	$(PYTHON) $(SCRIPTS)/p4_web_review.py $(OUTDIR) $(VIDEO) --mode $(MODE) --port $(PORT)
 
 crop: $(KEYFRAMES)
 	$(PYTHON) $(SCRIPTS)/p5_crop.py $(OUTDIR) --mode $(MODE) --safety-margin $(SAFETY_MARGIN)
@@ -185,7 +187,7 @@ page-review: $(PAGES)
 	$(PYTHON) $(SCRIPTS)/p7_review_pages.py $(OUTDIR)
 
 page-review-web: $(PAGES)
-	$(PYTHON) $(SCRIPTS)/p7_web_review.py $(OUTDIR)
+	$(PYTHON) $(SCRIPTS)/p7_web_review.py $(OUTDIR) --port $(PORT)
 
 binarize: $(BW_META)
 $(BW_META): $(PAGES)

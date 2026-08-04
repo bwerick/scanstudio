@@ -21,6 +21,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from miniws import CLOSE, TEXT, WebSocket, accept_key
 from utils import log
 
+# One port for every ScanStudio web app (capture and both reviews): the
+# phases run serially, so they never contend, and on ChromeOS a single port
+# means a single Settings > Linux > Port forwarding rule covers the whole
+# pipeline. A second app started while one is still running fails to bind
+# with a clear message rather than silently picking another port Chrome
+# isn't forwarded to.
+DEFAULT_PORT = 8412
+
 CHUNK = 1 << 20
 
 CTYPES = {

@@ -18,7 +18,7 @@ one thing this front end skips is the post-save matplotlib comparison plot.
 
 Usage:
   python scripts/p4_web_review.py output/mybook recordings/mybook.mp4
-  ... then open http://localhost:8413 in Chrome.
+  ... then open http://localhost:8412 (the shared ScanStudio port) in Chrome.
 
   ChromeOS: forward the port first — Settings > Linux > Port forwarding.
 
@@ -57,7 +57,13 @@ from utils import (
     resolve_rotation,
     rigid_shift,
 )
-from webui import WebUIServer, chromeos_note, send_file, serve_forever_in_thread
+from webui import (
+    DEFAULT_PORT,
+    WebUIServer,
+    chromeos_note,
+    send_file,
+    serve_forever_in_thread,
+)
 
 ACTIONS = ("keep", "dup", "occlusion", "other", "cover", "doc_start")
 DELETES = ("dup", "occlusion", "other")
@@ -70,7 +76,7 @@ def parse_args(argv=None):
                    help="Recording, for the insert scrubber (optional)")
     p.add_argument("--mode", default="double", choices=["single", "double"])
     p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8413)
+    p.add_argument("--port", type=int, default=DEFAULT_PORT)
     return p.parse_args(argv)
 
 
@@ -856,6 +862,11 @@ def main():
         server = build_server(args)
     except (FileNotFoundError, OSError) as e:
         log(f"ERROR: {e}")
+        import errno
+        if isinstance(e, OSError) and e.errno == errno.EADDRINUSE:
+            log("  The shared ScanStudio port is taken — another web app "
+                "(capture or a review) is still running. Finish or Ctrl+C "
+                "it, or pass --port.")
         sys.exit(1)
     port = server.server_address[1]
     log("")

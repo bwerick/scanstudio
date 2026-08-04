@@ -12,7 +12,7 @@ starts — the same code contract P9 reads.
 
 Usage:
   python scripts/p7_web_review.py output/mybook
-  ... then open http://localhost:8414 in Chrome.
+  ... then open http://localhost:8412 (the shared ScanStudio port) in Chrome.
 
   ChromeOS: forward the port first — Settings > Linux > Port forwarding.
 
@@ -31,7 +31,13 @@ from pathlib import Path
 from PIL import Image
 
 from utils import ProjectPaths, ensure_dir, log, segment_documents, slugify
-from webui import WebUIServer, chromeos_note, send_file, serve_forever_in_thread
+from webui import (
+    DEFAULT_PORT,
+    WebUIServer,
+    chromeos_note,
+    send_file,
+    serve_forever_in_thread,
+)
 
 JPEG_QUALITY = 95   # P6's quality, so a re-render doesn't degrade the page
 
@@ -40,7 +46,7 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Phase 7: Page review in the browser")
     p.add_argument("output_dir", help="Base output directory (e.g. output/mybook)")
     p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8414)
+    p.add_argument("--port", type=int, default=DEFAULT_PORT)
     return p.parse_args(argv)
 
 
@@ -259,6 +265,11 @@ def main():
         server = build_server(args)
     except (FileNotFoundError, OSError) as e:
         log(f"ERROR: {e}")
+        import errno
+        if isinstance(e, OSError) and e.errno == errno.EADDRINUSE:
+            log("  The shared ScanStudio port is taken — another web app "
+                "(capture or a review) is still running. Finish or Ctrl+C "
+                "it, or pass --port.")
         sys.exit(1)
     port = server.server_address[1]
     log("")
