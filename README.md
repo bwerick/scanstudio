@@ -196,7 +196,7 @@ make finish VIDEO=recordings/mybook.mp4
 
 ### P0 — Live Capture in the browser (`make live-web`)
 
-Same phase, different front end: **Chrome owns the camera** via `getUserMedia`/`MediaRecorder`, and streams small analysis frames to a local server (`scripts/p0_web_capture.py`) that runs the *same* detector (`scripts/live_state.py`) as `make live` — two front ends, one brain, identical artifacts, so `make finish` works unchanged.
+Same phase, different front end: **Chrome owns the camera** via `getUserMedia`/`MediaRecorder`, and streams small analysis frames to a local server (`scripts/p0_web_capture.py`) that runs the *same* detector (`scripts/live_state.py`) as `make live` — two front ends, one brain, identical artifacts, so `make finish` works unchanged. To stay in the browser for the reviews too (same port, same forwarding rule), continue with `make finish-web` instead.
 
 ```bash
 make live-web NAME=mybook       # then open http://localhost:8412 in Chrome

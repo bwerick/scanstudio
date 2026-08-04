@@ -647,7 +647,9 @@ def main():
     if session is not None and session.finished:
         log("")
         log("PHASE 0 COMPLETE")
-        log(f"  Next: make finish VIDEO={args.video_out}")
+        # finish-web keeps the reviews in the same browser (and the same
+        # forwarded port) this capture just used — the ChromeOS-native path.
+        log(f"  Next: make finish-web VIDEO={args.video_out}")
 
 
 if __name__ == "__main__":

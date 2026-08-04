@@ -528,7 +528,7 @@ function showSummary(m) {
   $("summary-body").textContent =
     `${m.keyframes} keyframes over ${m.total_frames} frames · ` +
     `recording: ${m.video} · normalize: ${m.normalize}`;
-  $("summary-next").textContent = `make finish VIDEO=${m.video}`;
+  $("summary-next").textContent = `make finish-web VIDEO=${m.video}`;
   $("summary").style.display = "flex";
   setStatus("Done — you can close this tab.");
 }

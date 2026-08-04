@@ -149,7 +149,7 @@ endif
 	$(PYTHON) $(SCRIPTS)/p0_web_capture.py output/$(NAME) recordings/$(NAME).mp4 \
 		--port $(PORT) --settle-threshold $(SETTLE) --turn-threshold $(TURN) \
 		--settle-time $(SETTLE_TIME)
-	@echo "Live capture done. Continue with: make finish VIDEO=recordings/$(NAME).mp4"
+	@echo "Live capture done. Continue with: make finish-web VIDEO=recordings/$(NAME).mp4"
 
 bw: binarize pdf-bw
 	@echo "B&W pipeline complete: $(PDF_BW)"
