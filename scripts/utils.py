@@ -545,6 +545,29 @@ def resolve_crop_quad(keyframes, idx):
 # page_mask_robust: rigid tracking with the plain HSV mask had 9/117
 # catastrophic frames (>5% error, worst 6.7%) at long horizons, the
 # backstop zero (worst 4.2%), with no change at short horizons.
+#
+# Also tried and rejected (2026-08, 1159 operator boxes across 8 books):
+# replacing the mask as the tracker's boundary measurement with a *learned*
+# corner regressor trained on this rig's own geometry — the obvious answer
+# to "the operator's box is a convention no generic segmenter targets".
+# Two architectures, both differencing against the anchor frame so their
+# per-session bias cancels: a full-frame MobileNetV3-Small regressing 4
+# corners + gutter, and a per-corner patch refiner (96 px patches, jittered,
+# flip-canonicalized). Emulating this watchdog and scoring at the frames the
+# operator actually corrected, both lost to the mask: median next-edit error
+# 0.80% of width for the mask, 0.83% for the refiner, 0.92% for the
+# full-frame net. The patch refiner could not even improve a deliberately
+# jittered box (2.10% median in, 2.09–5.04% out). The ceiling is not
+# perception: the page-block boundary is partly *invisible*, inside the
+# fanned stack, so there is nothing local to regress onto. This closes the
+# "anchor-relative snap" variant the edge-snap note above left open.
+#
+# What that benchmark did establish is that the corrections themselves are
+# largely cosmetic: across 347 operator edits the propagated box severs a
+# median of 11 glyphs per frame and the operator's own replacement 8, out of
+# ~2581 — 40% of edits reduce severed glyphs, 31% increase them. The box was
+# already good; the win is in *asking for fewer corrections*, not in
+# measuring the boundary more precisely.
 
 # Mask/measure at this width: page_mask's 25 px morphology is tuned for
 # roughly this scale, and it keeps a 4K frame cheap (~60 ms).
