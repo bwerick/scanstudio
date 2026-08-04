@@ -66,7 +66,7 @@ PREVIEW_HEIGHT ?= 720
 # live-web: port the capture page is served on (http://localhost:$(PORT))
 PORT          ?= 8412
 
-.PHONY: all bw live live-web finish motion peaks keyframes review crop split page-review binarize pdf pdf-bw clean install install-legacy tkinter ffmpeg probe-camera test help
+.PHONY: all bw live live-web finish finish-web motion peaks keyframes review review-web crop split page-review page-review-web binarize pdf pdf-bw clean install install-legacy tkinter ffmpeg probe-camera test help
 
 help:
 	@echo "ScanStudio Pipeline"
@@ -79,14 +79,17 @@ help:
 	@echo "  live-web      P0: Live capture via Chrome's camera (ChromeOS-friendly)"
 	@echo "  probe-camera  List camera indices and which one delivers 4K"
 	@echo "  finish        P4-P9 back half (run after 'live')"
+	@echo "  finish-web    P4-P9 with the reviews in Chrome (ChromeOS-friendly)"
 	@echo ""
 	@echo "  motion        P1: Motion signal"
 	@echo "  peaks         P2: Detect peaks"
 	@echo "  keyframes     P3: Select keyframes"
 	@echo "  review        P4: Review keyframes (GUI, reentrant)"
+	@echo "  review-web    P4 in Chrome — ChromeOS-friendly, <video> insert scrubber"
 	@echo "  crop          P5: Crop keyframes"
 	@echo "  split         P6: Split into pages"
 	@echo "  page-review   P7: Page review — drop/adjust/mark documents (GUI)"
+	@echo "  page-review-web  P7 in Chrome (ChromeOS-friendly)"
 	@echo "  binarize      P8: Binarize to B&W"
 	@echo "  pdf           P9: Build PDF"
 	@echo "  pdf-bw        P9: Build B&W PDF"
@@ -110,6 +113,12 @@ all: motion peaks keyframes finish
 # Back half (P4-P9): review, crop, split, page-review, build PDF.
 # Use after 'live' (or run individually). Pauses at P4 and P7.
 finish: review crop split page-review pdf
+	@echo "Pipeline complete: $(PDF)"
+
+# The same back half with the browser reviews: pauses at P4 and P7 until
+# Finish (Q) is pressed in the tab, then the chain proceeds — the web
+# analogue of closing the Tk window. Ctrl+C in the terminal aborts the chain.
+finish-web: review-web crop split page-review-web pdf
 	@echo "Pipeline complete: $(PDF)"
 
 # Live capture (P0): record the webcam and auto-select keyframes in real time.
@@ -158,6 +167,13 @@ $(KEYFRAMES): $(PEAKS)
 review: $(KEYFRAMES)
 	$(PYTHON) $(SCRIPTS)/p4_review_keyframes.py $(OUTDIR) $(VIDEO) --mode $(MODE)
 
+# The same review served to Chrome (scripts/p4_web_review.py): identical
+# state and save format, browser rendering. The insert scrubber is a native
+# <video> over the recording — the ChromeOS path, where Tk clips off small
+# screens and software-decodes 4K per scrub step.
+review-web: $(KEYFRAMES)
+	$(PYTHON) $(SCRIPTS)/p4_web_review.py $(OUTDIR) $(VIDEO) --mode $(MODE)
+
 crop: $(KEYFRAMES)
 	$(PYTHON) $(SCRIPTS)/p5_crop.py $(OUTDIR) --mode $(MODE) --safety-margin $(SAFETY_MARGIN)
 
@@ -167,6 +183,9 @@ $(PAGES): $(KEYFRAMES)
 
 page-review: $(PAGES)
 	$(PYTHON) $(SCRIPTS)/p7_review_pages.py $(OUTDIR)
+
+page-review-web: $(PAGES)
+	$(PYTHON) $(SCRIPTS)/p7_web_review.py $(OUTDIR)
 
 binarize: $(BW_META)
 $(BW_META): $(PAGES)

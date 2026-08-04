@@ -140,15 +140,18 @@ Most targets require `VIDEO=path/to/file.mp4`. The exception is `make live`, whi
 | `make live NAME=...` | P0: Live webcam capture — records + selects keyframes, then run `make finish VIDEO=recordings/<NAME>.mp4` |
 | `make live-web NAME=...` | P0 with Chrome as the camera — same artifacts; the only camera path on ChromeOS |
 | `make finish VIDEO=...` | Back half (P4–P9): review, crop, split, page-review, PDF — run after `make live` |
+| `make finish-web VIDEO=...` | Same back half with the reviews in Chrome — press **Finish (Q)** in each tab to let the chain advance |
 | `make all VIDEO=...` | Full pipeline — runs P1–P7 and P9, pauses at P4 and P7 |
 | `make bw VIDEO=...` | Binarize + B&W PDF (run after `make all`) |
 | `make motion VIDEO=...` | P1: Compute motion signal |
 | `make peaks VIDEO=...` | P2: Detect page-turn peaks |
 | `make keyframes VIDEO=...` | P3: Extract keyframe images |
 | `make review VIDEO=...` | P4: Review keyframes (GUI, reentrant) |
+| `make review-web VIDEO=...` | P4 in Chrome — same review, ChromeOS-friendly, `<video>` insert scrubber |
 | `make crop VIDEO=...` | P5: Crop keyframes |
 | `make split VIDEO=...` | P6: Split into individual pages |
 | `make page-review VIDEO=...` | P7: Page review — drop pages, adjust geometry, mark documents (GUI) |
+| `make page-review-web VIDEO=...` | P7 in Chrome (ChromeOS-friendly) |
 | `make binarize VIDEO=...` | P8: Binarize to B&W |
 | `make pdf VIDEO=...` | P9: Build color PDF |
 | `make pdf-bw VIDEO=...` | P9: Build B&W PDF |
@@ -235,6 +238,8 @@ make review VIDEO=recordings/mybook.mp4
 
 Tkinter GUI for reviewing and correcting the keyframe selection. This phase is reentrant — run it as many times as needed before proceeding.
 
+Prefer the browser on ChromeOS (or any small screen): `make review-web VIDEO=...` serves the same review to Chrome at `http://localhost:8413` — identical state, keys, and save format, with the insert scrubber as a native `<video>` (hardware decode, instant seeking, vs. a software 4K decode per keypress in Tk). On ChromeOS forward the port first: Settings > Linux > Port forwarding.
+
 **Keys:**
 
 | Key | Action |
@@ -286,6 +291,8 @@ make page-review VIDEO=recordings/mybook.mp4
 ```
 
 Tkinter GUI for dropping bad pages, nudging a page's geometry, and marking where each document starts. Review state is saved to `json/page_review.json`; Save also applies drops, re-renders adjusted pages, and stamps document starts into `json/pages.json`.
+
+Browser version: `make page-review-web VIDEO=...` (Chrome at `http://localhost:8414`, same keys and outputs — the ChromeOS-friendly path).
 
 | Key | Action |
 |-----|------|
