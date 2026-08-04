@@ -152,6 +152,8 @@ let chunkChain = Promise.resolve();   // keeps recorder chunks in send order
 let chunkSeq = 0, skippedSends = 0;
 let fpsEma = 0;                       // EMA of ms between camera frames
 let lastFrameAt = 0;                  // performance.now() of the last frame
+let tsPrev = 0, tsDeltaEma = 0;       // EMA of frame.timestamp deltas (µs)
+let procMsEma = 0, statTick = 0;      // EMA of per-frame processing cost
 
 // The ring holds *copies* of recent frames, never live VideoFrames: camera
 // frames come from a small driver buffer pool (~6 on ChromeOS's HAL3 stack),
@@ -252,6 +254,18 @@ async function start() {
     const f = fpsEma ? (1000 / fpsEma).toFixed(1) : "—";
     $("fps").textContent = skippedSends
       ? `${f} fps · ${skippedSends} dropped` : `${f} fps`;
+    // Pipeline diagnostics, logged server-side. epoch_ms rides along so the
+    // server (same machine, same clock) can log the socket's transit lag —
+    // this message queues behind any frame/chunk backlog by design.
+    if ((statTick++ & 1) === 0) {
+      send({ type: "stats", epoch_ms: Date.now(),
+             cam_fps: fpsEma ? +(1000 / fpsEma).toFixed(1) : null,
+             proc_ms: +procMsEma.toFixed(1),
+             ts_delta_ms: +(tsDeltaEma / 1000).toFixed(1),
+             skipped: skippedSends,
+             buffered: ws.bufferedAmount,
+             ring_mode: ringMode });
+    }
   }, 1000);
 }
 
@@ -290,6 +304,11 @@ async function pump() {
         const now = performance.now();
         if (last) fpsEma = fpsEma ? fpsEma * 0.9 + (now - last) * 0.1 : now - last;
         last = lastFrameAt = now;
+        const ts = frame.timestamp;
+        if (tsPrev && ts > tsPrev) {
+          tsDeltaEma = tsDeltaEma ? tsDeltaEma * 0.9 + (ts - tsPrev) * 0.1 : ts - tsPrev;
+        }
+        tsPrev = ts;
         if (pending) { pending.close(); skippedSends++; }
         pending = frame;
         if (wake) { wake(); wake = null; }
@@ -310,6 +329,7 @@ async function pump() {
       }
       const frame = pending;
       pending = null;
+      const t0 = performance.now();
       try {
         // Ring first: a capture request can arrive the moment the analysis
         // frame lands server-side, and must find this frame already copied.
@@ -322,6 +342,8 @@ async function pump() {
         }
       } finally {
         frame.close();          // always, same iteration — see ring comment
+        const dt = performance.now() - t0;
+        procMsEma = procMsEma ? procMsEma * 0.9 + dt * 0.1 : dt;
       }
     }
   } catch (e) {

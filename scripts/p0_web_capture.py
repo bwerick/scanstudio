@@ -256,6 +256,7 @@ class WebSession:
         self.frames_seen = 0         # real analysis frames received
         self.gap_filled = 0
         self.dup_dropped = 0
+        self.last_stats = None       # most recent browser "stats" message
         self.analysis_w = None
         self.analysis_h = None
 
@@ -315,6 +316,18 @@ class WebSession:
                 "keep the capture tab visible while scanning")
         elif t == "capture_note":
             log(f"  NOTE from browser: {m.get('text')}")
+        elif t == "stats":
+            # Browser and server share a clock (same machine / same host for
+            # the ChromeOS port forward), so epoch_ms measures how long this
+            # message sat behind the socket's frame/chunk backlog.
+            lag_s = max(0.0, time.time() - m.get("epoch_ms", 0) / 1000.0)
+            self.last_stats = m
+            log(f"  [stats] cam {m.get('cam_fps')} fps · "
+                f"proc {m.get('proc_ms')} ms/frame · "
+                f"frame-ts step {m.get('ts_delta_ms')} ms · "
+                f"skipped {m.get('skipped')} · "
+                f"ws buffered {m.get('buffered', 0) / 1e6:.1f} MB · "
+                f"ring {m.get('ring_mode')} · socket lag {lag_s:.2f} s")
         elif t == "capture_missing":
             fi = m.get("frame_index")
             self.pending.pop(fi, None)
@@ -479,6 +492,7 @@ class WebSession:
                 "recorder_chunks": self._chunks,
                 "normalize": status,
                 "raw_recording": str(self.raw_path) if self.raw_path else None,
+                "last_stats": self.last_stats,
             },
         }
         meta_path = paths.json / "metadata.json"
