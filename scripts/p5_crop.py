@@ -36,7 +36,7 @@ from utils import (
     ProjectPaths,
     check_overwrite,
     consensus_geometry,
-    page_mask,
+    page_mask_robust,
     resolve_rotation,
     resolve_crop_quad,
 )
@@ -99,7 +99,8 @@ def crop_double_page(img, safety_pct, rotation_override=None):
     """Deskew and isolate a book spread from a tinted table.
 
     Replaces grayscale Otsu (which merges cream pages into light-brown wood)
-    with an HSV page mask, measures the spread's tilt from the mask's top edge,
+    with a page mask (HSV, with a U^2-Net backstop when that fails — see
+    page_mask_robust), measures the spread's tilt from the mask's top edge,
     rotates to deskew, then tight-crops to the page bounds. Robust to rotation
     and translation of the spread within the frame. The downstream split step
     finds the gutter on the result, so this only has to straighten and frame
@@ -114,7 +115,7 @@ def crop_double_page(img, safety_pct, rotation_override=None):
     the crop box itself, can be mapped back onto the original frame.
     """
     h, w = img.shape[:2]
-    mask = page_mask(img)
+    mask = page_mask_robust(img)
 
     if cv2.countNonZero(mask) < 0.2 * w * h:
         # No page-sized bright region found — leave the frame essentially as-is.
@@ -131,7 +132,7 @@ def crop_double_page(img, safety_pct, rotation_override=None):
         img = cv2.warpAffine(
             img, M, (w, h), flags=cv2.INTER_LINEAR, borderValue=(255, 255, 255)
         )
-        mask = page_mask(img)
+        mask = page_mask_robust(img)
 
     x, y, bw, bh = _mask_bounds(mask)
     mx, my = int(w * safety_pct), int(h * safety_pct)

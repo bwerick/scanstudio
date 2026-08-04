@@ -16,3 +16,9 @@ opencv-python
 scikit-image
 Pillow
 reportlab
+# Learned backstop for the HSV page mask (see utils.page_mask_robust). CPU
+# ONNX — no torch, runs on Mac/Linux/Chromebook alike. Downloads the ~176 MB
+# u2net model to ~/.u2net on first use. The pipeline degrades gracefully to
+# the plain HSV mask if this is missing.
+rembg
+onnxruntime

@@ -297,6 +297,84 @@ def page_mask(img, sat_max: int = 70, val_min: int = 150) -> "np.ndarray":
     return clean
 
 
+def _mask_plausible(mask) -> bool:
+    """Whether a mask looks like a book on a table rather than a failure.
+
+    The HSV mask's failures are not subtle: on a pale table it merges page
+    and wood into a blob spanning the whole frame, and under bad lighting it
+    keeps only a glare patch. A real spread covers a substantial minority of
+    the frame and, while it often runs off the top and bottom, never spans
+    essentially the full frame in *both* axes.
+    """
+    h, w = mask.shape[:2]
+    area = cv2.countNonZero(mask) / (w * h)
+    if not (0.10 <= area <= 0.90):
+        return False
+    _, _, bw, bh = cv2.boundingRect(mask)
+    return not (bw >= 0.97 * w and bh >= 0.97 * h)
+
+
+# rembg (U^2-Net) is an optional dependency: the session is created on first
+# use and the import failure is remembered, so a machine without it pays one
+# try and then behaves exactly as before the backstop existed.
+_u2net = {"session": None, "remove": None, "state": "untried"}
+
+
+def u2net_page_mask(img):
+    """Page mask from U^2-Net salient-object segmentation, or None.
+
+    The learned counterpart to ``page_mask``: rembg's U^2-Net segments the
+    book as an *object*, so it never merges it with a same-colored table —
+    the HSV mask's catastrophic failure mode. It is coarser along the
+    boundary and ~0.5 s/frame on CPU at the tracker's working width, which
+    is why it backstops the HSV mask rather than replacing it. Returns the
+    same contract as ``page_mask`` (uint8 0/255, largest blob filled solid),
+    or None when rembg isn't installed or finds nothing.
+    """
+    if _u2net["state"] == "unavailable":
+        return None
+    if _u2net["session"] is None:
+        try:
+            from rembg import new_session, remove
+
+            _u2net["session"], _u2net["remove"] = new_session("u2net"), remove
+            _u2net["state"] = "ready"
+        except ImportError:
+            _u2net["state"] = "unavailable"
+            return None
+    m = _u2net["remove"](
+        cv2.cvtColor(img, cv2.COLOR_BGR2RGB),
+        session=_u2net["session"],
+        only_mask=True,
+        post_process_mask=True,
+    )
+    m = (m > 127).astype(np.uint8) * 255
+    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return None
+    clean = np.zeros_like(m)
+    cv2.drawContours(clean, [max(cnts, key=cv2.contourArea)], -1, 255, -1)
+    return clean
+
+
+def page_mask_robust(img):
+    """``page_mask`` with a learned backstop for its catastrophic failures.
+
+    Benchmarked against 120 operator-drawn boxes: the HSV mask tracks the
+    book to ~1% of the frame width in the typical case but its worst frames
+    are 37%-of-width disasters (page merged with a pale table), while U^2-Net
+    never produced one. So the cheap mask runs first and the model only runs
+    on frames where the HSV blob fails the plausibility check. When rembg is
+    missing or U^2-Net's blob is implausible too, the HSV mask is returned
+    unchanged — identical behavior to the pre-backstop pipeline.
+    """
+    mask = page_mask(img)
+    if _mask_plausible(mask):
+        return mask
+    m2 = u2net_page_mask(img)
+    return m2 if m2 is not None and _mask_plausible(m2) else mask
+
+
 def book_center_x(mask) -> float | None:
     """Fraction (0–1) of the book's horizontal centre from a page mask.
 
@@ -337,7 +415,7 @@ def detect_gutter(spread, mask=None, prior: float | None = None) -> int:
     """
     h, w = spread.shape[:2]
     if mask is None:
-        mask = page_mask(spread)
+        mask = page_mask_robust(spread)
 
     if prior is None:
         gc = book_center_x(mask)
@@ -449,6 +527,18 @@ def resolve_crop_quad(keyframes, idx):
 # flags frames whose non-rigid residual exceeds ~2% of the frame width, or
 # that can't be measured at all (occlusion), for an operator's glance —
 # everything else the box handles by itself.
+#
+# Also tried and rejected (2026-08, against 117 operator boxes across three
+# sessions): snapping the published box's edges to the strongest nearby
+# image gradient, phone-scanner style. At the production horizon (anchor a
+# few keyframes back) it made every session *worse* — next-sample median
+# error 0.58% → 0.95% of the width — because the operator's box encodes
+# intent, not the physical outline: it often sits deliberately off the
+# gradient line (margin, excluded covers), and an absolute snap drags it
+# back. The same benchmark is what put the U^2-Net backstop into
+# page_mask_robust: rigid tracking with the plain HSV mask had 9/117
+# catastrophic frames (>5% error, worst 6.7%) at long horizons, the
+# backstop zero (worst 4.2%), with no change at short horizons.
 
 # Mask/measure at this width: page_mask's 25 px morphology is tuned for
 # roughly this scale, and it keeps a 4K frame cheap (~60 ms).
@@ -535,10 +625,14 @@ def edge_boundary_offsets(mask, quad, band, n_samples=25, step=2):
 def measure_quad_offsets(img, quad_px, band_px=None):
     """Per-edge page-boundary offsets for a full-res frame, in full-res px.
 
-    Downscales, runs ``page_mask``, and measures ``edge_boundary_offsets``
-    around ``quad_px``. Anchor frames and tracked frames must both be measured
-    through this same path so any systematic bias of the mask cancels in the
-    difference the tracker uses. Returns ``(offsets, reliable)``.
+    Downscales, runs ``page_mask_robust``, and measures
+    ``edge_boundary_offsets`` around ``quad_px``. Anchor frames and tracked
+    frames must both be measured through this same path so any systematic
+    bias of the mask cancels in the difference the tracker uses. (The U^2-Net
+    backstop can break that cancellation on the rare frame where only one
+    side of the comparison fell back — but the alternative on those frames
+    was a whole-frame HSV blob, a far larger error than the masks' boundary
+    disagreement.) Returns ``(offsets, reliable)``.
     """
     h, w = img.shape[:2]
     if band_px is None:
@@ -549,7 +643,7 @@ def measure_quad_offsets(img, quad_px, band_px=None):
         if s < 1.0
         else img
     )
-    mask = page_mask(small)
+    mask = page_mask_robust(small)
     off, rel = edge_boundary_offsets(
         mask, np.asarray(quad_px, dtype=float) * s, band=band_px * s
     )
@@ -680,7 +774,7 @@ def consensus_geometry(images_dir, keyframes, cache_path=None,
             if scale < 1.0
             else img
         )
-        masks.append(page_mask(small) > 0)
+        masks.append(page_mask_robust(small) > 0)
     if len(masks) < 3:
         return None
 

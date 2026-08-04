@@ -85,7 +85,7 @@ from utils import (
     measure_quad_offsets,
     quad_edge_bases,
     rigid_shift,
-    page_mask,
+    page_mask_robust,
     resolve_rotation,
     resolve_gutter,
     resolve_crop_quad,
@@ -1062,7 +1062,7 @@ class ReviewApp:
             else:
                 rot = resolve_rotation(self.keyframes, idx)
                 if rot is None:
-                    rot = _spread_tilt(page_mask(img))
+                    rot = _spread_tilt(page_mask_robust(img))
                 quad_px, cropped = self._auto_spread_quad(
                     img, self._resolve_margin(idx), rot
                 )
@@ -1152,7 +1152,7 @@ class ReviewApp:
         else:
             rot = resolve_rotation(self.keyframes, idx)
             if rot is None:
-                rot = _spread_tilt(page_mask(img))
+                rot = _spread_tilt(page_mask_robust(img))
             quad_px, cropped = self._auto_spread_quad(
                 img, self._resolve_margin(idx), rot
             )
