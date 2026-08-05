@@ -83,6 +83,7 @@ from utils import (
     consensus_geometry,
     detect_gutter,
     drift_due,
+    shift_due,
     measure_quad_offsets,
     quad_edge_bases,
     rigid_shift,
@@ -1815,6 +1816,7 @@ class ReviewApp:
         anchor_key, anchor, window = None, None, []
         quad0 = bases0 = axes = anchor_s = None
         shift_uv = [0.0, 0.0]  # applied translation, anchor-axis components
+        drift_mark = 0.0
         for idx, kf in enumerate(kfs):
             if self._watch_gen != gen:
                 return
@@ -1829,6 +1831,7 @@ class ReviewApp:
                 anchor_key, anchor, window = a_idx, None, []
                 quad0 = None
                 shift_uv = [0.0, 0.0]
+                drift_mark = 0.0
             if idx < from_idx:
                 continue
             if anchor is None:
@@ -1876,10 +1879,16 @@ class ReviewApp:
                 ):
                     shift_uv[ax] = shift[ax]
             # Two independent failure modes: a sudden event the residual
-            # sees, and slow accumulation it is nearly blind to (the budget).
+            # sees, and slow accumulation it is nearly blind to (the budget,
+            # spent by keyframes or by travel, whichever runs out first).
+            travelled = float(np.hypot(shift_uv[0], shift_uv[1])) / w
+            spent = shift_due(travelled, drift_mark)
+            if spent:
+                drift_mark = travelled
             flagged = (
                 (not measured)
                 or resid > WATCHDOG_ALERT_FRAC * w
+                or spent
                 or drift_due(idx, None if a_idx == "consensus" else a_idx)
             )
             if shift_uv[0] or shift_uv[1]:
@@ -1961,6 +1970,33 @@ class ReviewApp:
         self._queue_pos += 1
         self._show_current()
 
+    def _confirm_untracked(self, untracked):
+        """Ask before locking in boxes the drift sweep never checked.
+
+        Phase 5 falls back to the anchor box verbatim for a frame with no
+        crop_quad_track, which on a drifting rig is exactly the stale crop
+        that clips content — and until now that happened silently, so a
+        review that looked finished could still ship untracked frames.
+        Returns False to abort the save so the sweep can finish first.
+        """
+        if not untracked or self.mode != "double":
+            return True
+        n = len(untracked)
+        still = "" if self._watch_done else (
+            "\n\nThe sweep is still running "
+            f"({len(self._watch_scores)}/{len(self.keyframes)} scanned) — "
+            "waiting for it to finish will track these properly."
+        )
+        return messagebox.askyesno(
+            "Untracked frames",
+            f"{n} keyframe{'s' if n != 1 else ''} have no tracked crop box: "
+            "the drift sweep never reached them.\n\n"
+            "Phase 5 will crop them with the nearest earlier correction, "
+            f"unadjusted for drift.{still}\n\nSave anyway?",
+            default="no",
+            parent=self.root,
+        )
+
     # ── Save ──
     def _save(self):
         # Persist the tracker's per-frame boxes so p5 crops exactly what the
@@ -1970,14 +2006,21 @@ class ReviewApp:
         # in p5. Must happen before deletions shift the indices that key
         # _watch_scores. Frames with their own crop_quad (manual or pinned)
         # don't need one.
+        untracked = []
         for i, kf in enumerate(self.keyframes):
             kf.pop("crop_quad_track", None)
             ws = self._watch_scores.get(i)
             tq = ws.get("quad") if ws else None
-            if tq is not None and kf.get("crop_quad") is None:
+            if kf.get("crop_quad") is not None or kf.get("is_cover"):
+                continue
+            if tq is not None:
                 kf["crop_quad_track"] = [
                     [round(float(x), 5), round(float(y), 5)] for x, y in tq
                 ]
+            elif ws is None:
+                untracked.append(i)
+        if not self._confirm_untracked(untracked):
+            return
 
         # Collect deletions
         del_indices = sorted(

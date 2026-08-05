@@ -135,7 +135,12 @@ def test_p4_state_actions_confirm_and_save():
         read_until(ws, "state")
         send(ws, {"type": "save"})
         saved = read_until(ws, "saved")
-        assert saved == {"type": "saved", "deleted": 1, "kept": 2}
+        # untracked: keyframes the drift sweep never reached, so Phase 5 will
+        # crop them with the anchor box unadjusted. Reported so a mid-sweep
+        # save can't silently ship stale boxes.
+        assert saved == {"type": "saved", "deleted": 1, "kept": 2,
+                         "untracked": saved["untracked"]}
+        assert isinstance(saved["untracked"], int)
 
         kfs = json.loads((out / "json" / "keyframes.json").read_text())
         assert len(kfs) == 2

@@ -48,6 +48,7 @@ from utils import (
     consensus_geometry,
     detect_gutter,
     drift_due,
+    shift_due,
     log,
     measure_quad_offsets,
     page_mask_robust,
@@ -135,6 +136,10 @@ class ReviewSession:
         self.watch = {}
         self._watch_gen = 0
         self._watch_threads = []
+        # False from the moment a sweep starts until it runs to the end.
+        # Saving mid-sweep is the one way the review silently disagrees with
+        # what Phase 5 crops (see _save), so it has to be visible.
+        self._watch_complete = self.mode != "double"
         self._lock = threading.Lock()
 
         for i, kf in enumerate(self.keyframes):
@@ -651,15 +656,23 @@ class ReviewSession:
     # ── Save (Tk _save port, minus the matplotlib plot) ──────
 
     def _save(self):
+        untracked = []
         for i, kf in enumerate(self.keyframes):
             kf.pop("crop_quad_track", None)
             with self._lock:
                 ws = self.watch.get(i)
                 tq = ws.get("quad") if ws else None
-            if tq is not None and kf.get("crop_quad") is None:
+            if kf.get("crop_quad") is not None or kf.get("is_cover"):
+                continue
+            if tq is not None:
                 kf["crop_quad_track"] = [
                     [round(float(x), 5), round(float(y), 5)] for x, y in tq
                 ]
+            elif ws is None:
+                # The sweep never reached this frame, so Phase 5 will crop it
+                # with the anchor box verbatim — no drift following at all.
+                untracked.append(i)
+        self._warn_untracked(untracked)
 
         del_indices = sorted(
             [i for i, a in self.actions.items() if a in DELETES], reverse=True
@@ -742,8 +755,30 @@ class ReviewSession:
         log(f"Saved: {len(self.keyframes)} keyframes, "
             f"{len(deleted_info)} deleted")
         self.send({"type": "saved", "deleted": len(deleted_info),
-                   "kept": len(self.keyframes)})
+                   "kept": len(self.keyframes),
+                   "untracked": len(untracked)})
         self.send(self._state_msg())
+
+    def _warn_untracked(self, untracked):
+        """Say out loud when a save locks in boxes the sweep never checked.
+
+        Phase 5 falls back to the anchor box verbatim for a frame with no
+        crop_quad_track, which on a drifting rig is exactly the stale crop
+        that clips content — and until now that happened silently, so a
+        review that looked finished could still ship untracked frames. The
+        browser gets the count too (``saved.untracked``) so the operator
+        sees it without reading the terminal.
+        """
+        if not untracked or self.mode != "double":
+            return
+        log("")
+        log(f"  WARNING: {len(untracked)} keyframes saved without a tracked "
+            f"box — the drift sweep had not reached them.")
+        log(f"           Phase 5 will crop these with the nearest earlier "
+            f"correction, unadjusted for drift.")
+        if not self._watch_complete:
+            log("           The sweep is still running: reopen the review "
+                "and save again once it finishes.")
 
     # ── Watchdog (Tk _watchdog_worker port; results push over ws) ──
 
@@ -754,6 +789,7 @@ class ReviewSession:
         with self._lock:
             for i in [i for i in self.watch if i >= from_idx]:
                 del self.watch[i]
+        self._watch_complete = False
         self._watch_threads = [t for t in self._watch_threads if t.is_alive()]
         t = threading.Thread(
             target=self._watchdog_worker,
@@ -774,6 +810,7 @@ class ReviewSession:
         anchor_key, anchor, window = None, None, []
         quad0 = bases0 = axes = anchor_s = None
         shift_uv = [0.0, 0.0]
+        drift_mark = 0.0
         for idx, kf in enumerate(kfs):
             if self._watch_gen != gen:
                 return
@@ -788,6 +825,7 @@ class ReviewSession:
                 anchor_key, anchor, window = a_idx, None, []
                 quad0 = None
                 shift_uv = [0.0, 0.0]
+                drift_mark = 0.0
             if idx < from_idx:
                 continue
             if anchor is None:
@@ -834,10 +872,16 @@ class ReviewSession:
                 ):
                     shift_uv[ax] = shift[ax]
             # Two independent failure modes: a sudden event the residual
-            # sees, and slow accumulation it is nearly blind to (the budget).
+            # sees, and slow accumulation it is nearly blind to (the budget,
+            # spent by keyframes or by travel, whichever runs out first).
+            travelled = float(np.hypot(shift_uv[0], shift_uv[1])) / w
+            spent = shift_due(travelled, drift_mark)
+            if spent:
+                drift_mark = travelled
             flagged = (
                 (not measured)
                 or resid > WATCHDOG_ALERT_FRAC * w
+                or spent
                 or drift_due(idx, None if a_idx == "consensus" else a_idx)
             )
             if shift_uv[0] or shift_uv[1]:
@@ -848,6 +892,7 @@ class ReviewSession:
             self._publish_watch(gen, idx, float(resid), measured, flagged,
                                 tq_frac)
         if self._watch_gen == gen:
+            self._watch_complete = True
             self.send({"type": "watch_done"})
 
     def _publish_watch(self, gen, idx, score, measured, flagged, quad):

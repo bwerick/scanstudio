@@ -12,9 +12,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from utils import DRIFT_HORIZON_LIMIT, drift_due  # noqa: E402
+from utils import (DRIFT_HORIZON_LIMIT, DRIFT_SHIFT_FRAC,  # noqa: E402
+                   drift_due, shift_due)
 
 L = DRIFT_HORIZON_LIMIT
+S = DRIFT_SHIFT_FRAC
 passed = failed = 0
 
 
@@ -60,6 +62,34 @@ def test_a_correction_resets_the_budget():
 def test_limit_is_overridable():
     check("test_limit_is_overridable",
           drift_due(15, 10, limit=5) and not drift_due(15, 10, limit=7))
+
+
+def test_shift_quiet_inside_its_budget():
+    check("test_shift_quiet_inside_its_budget", not shift_due(S * 0.9, 0.0))
+
+
+def test_shift_fires_once_the_budget_is_spent():
+    check("test_shift_fires_once_the_budget_is_spent", shift_due(S, 0.0))
+
+
+def test_shift_measures_from_the_mark_not_zero():
+    # After reminding at S, drifting to 1.5*S must stay quiet: only another
+    # full budget's travel earns a second reminder.
+    check("test_shift_measures_from_the_mark_not_zero",
+          not shift_due(1.5 * S, S) and shift_due(2 * S, S))
+
+
+def test_a_fast_rig_reminds_before_the_horizon():
+    # The case the frame count misses: 1.6% of travel inside 9 keyframes.
+    fast = [shift_due(0.016, 0.0), drift_due(9, 0)]
+    check("test_a_fast_rig_reminds_before_the_horizon",
+          fast == [True, False])
+
+
+def test_a_still_rig_is_not_nagged_by_travel():
+    # A box that never moves must rely on the horizon alone.
+    check("test_a_still_rig_is_not_nagged_by_travel",
+          not shift_due(0.0, 0.0) and drift_due(L, 0))
 
 
 if __name__ == "__main__":

@@ -602,6 +602,17 @@ CONSENSUS_SAMPLES = 15
 # (a hand, a bumped rig), the budget catches slow accumulation the residual
 # is nearly blind to.
 DRIFT_HORIZON_LIMIT = 40
+# The other half of the budget. A keyframe count only measures drift if every
+# rig drifts at the same rate, and they don't: on the corpus above the box
+# needed 41-80 keyframes to accumulate 2.2% of the frame width, while a
+# session shot on a second rig moved 1-4% within 1-9 keyframes and swung
+# 12.6% across the book. Forty frames would not have fired once before that
+# session was already past 3%. Accumulated displacement transfers where a
+# frame count doesn't, so whichever budget is spent first raises the
+# reminder. (Measured alone on the single-rig corpus, displacement is the
+# weaker predictor — AUC 0.708 against 0.905 — but that corpus holds drift
+# rate constant, which is exactly the condition that flatters frame count.)
+DRIFT_SHIFT_FRAC = 0.015
 
 
 def drift_due(idx, anchor_idx, limit=DRIFT_HORIZON_LIMIT) -> bool:
@@ -617,6 +628,21 @@ def drift_due(idx, anchor_idx, limit=DRIFT_HORIZON_LIMIT) -> bool:
     """
     horizon = idx - (0 if anchor_idx is None else anchor_idx)
     return horizon > 0 and horizon % limit == 0
+
+
+def shift_due(shift_frac, mark, shift_limit=DRIFT_SHIFT_FRAC) -> bool:
+    """Whether the box has travelled another budget's worth since ``mark``.
+
+    ``shift_frac`` is the tracker's accumulated translation from the anchor
+    as a fraction of frame width; ``mark`` is the value at the last
+    reminder. Comparing against a mark rather than an absolute threshold
+    keeps the cadence one reminder per budget spent — the same discipline
+    ``drift_due`` applies to the horizon — instead of firing on every frame
+    once a static threshold is crossed. The caller advances the mark to
+    ``shift_frac`` when this returns True, and resets it to 0.0 whenever the
+    anchor changes.
+    """
+    return shift_frac >= mark + shift_limit
 
 
 def _order_quad(pts):
