@@ -10,6 +10,7 @@ Run standalone (`python tests/test_web_review.py`) or under pytest.
 """
 
 import json
+import shutil
 import socket
 import sys
 import tempfile
@@ -195,6 +196,103 @@ def test_p4_serves_page_and_ranged_images():
             assert e.code == 416
 
         server.shutdown()
+
+
+# ── P4 scrub source: browser-playable recording, or a proxy ──
+
+def make_recording(path, fourcc, n=24, size=(64, 48)):
+    """A tiny video in ``fourcc``; None if this build can't write it."""
+    w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*fourcc), 30.0, size)
+    if not w.isOpened():
+        w.release()
+        return None
+    for i in range(n):
+        frame = np.full((size[1], size[0], 3), (i * 9) % 255, np.uint8)
+        w.write(frame)
+    w.release()
+    return path
+
+
+def p4_session(out, video, send=None):
+    args = p4_web_review.parse_args([str(out), str(video), "--mode", "single"])
+    from utils import ProjectPaths
+    return p4_web_review.ReviewSession(args, ProjectPaths(str(out)),
+                                       send or (lambda m: None))
+
+
+def test_p4_plays_a_browser_codec_directly():
+    with tempfile.TemporaryDirectory() as tmp:
+        out = make_p4_project(Path(tmp))
+        vid = make_recording(Path(tmp) / "h264.mp4", "avc1")
+        if vid is None:
+            return                       # build without an H.264 encoder
+        s = p4_session(out, vid)
+        s._init_scrub_source()
+        assert s.proxy_state == "native", s.proxy_state
+        assert s.scrub_video() == vid    # served straight, no transcode
+        assert s.video_frames == 24
+        assert not s.proxy_path.exists()
+
+
+def test_p4_transcodes_a_proxy_for_a_codec_no_browser_plays():
+    if shutil.which("ffmpeg") is None:
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        out = make_p4_project(Path(tmp))
+        vid = make_recording(Path(tmp) / "mp4v.mp4", "mp4v")
+        msgs = []
+        s = p4_session(out, vid, msgs.append)
+        s._init_scrub_source()
+        assert s.proxy_state == "building"
+        assert s.scrub_video() == vid    # the original until the proxy lands
+
+        # Grabbing before the proxy exists must not insert: a scrubber whose
+        # <video> never loaded reports frame 0 for every position.
+        before = len(s.keyframes)
+        s.handle({"type": "insert", "frame_index": 0})
+        assert len(s.keyframes) == before and not s.pending_inserts
+        assert msgs[-1]["type"] == "notice"
+
+        s._proxy_thread.join(timeout=120)
+        assert s.proxy_state == "ready", s.proxy_msg
+        assert s.scrub_video() == s.proxy_path
+        assert not s.proxy_path.with_suffix(".part.mp4").exists()
+        # Frame-for-frame with the recording: the scrubber addresses the
+        # proxy by index and grabs that index from the original.
+        assert s._probe(s.proxy_path)[1] == s.video_frames
+        assert [m["state"] for m in msgs if m["type"] == "proxy"][-1] == "ready"
+
+        # A proxy that still lines up is reused by the next session.
+        s2 = p4_session(out, vid)
+        s2._init_scrub_source()
+        assert s2.proxy_state == "ready" and s2._proxy_thread is None
+
+        # One that doesn't (here: a longer recording) is rebuilt.
+        vid2 = make_recording(Path(tmp) / "mp4v2.mp4", "mp4v", n=48)
+        s3 = p4_session(out, vid2)
+        s3._init_scrub_source()
+        assert s3.proxy_state == "building"
+        s3._proxy_thread.join(timeout=120)
+        assert s3._probe(s3.proxy_path)[1] == 48
+
+
+def test_p4_says_so_when_it_cannot_make_a_proxy():
+    with tempfile.TemporaryDirectory() as tmp:
+        out = make_p4_project(Path(tmp))
+        vid = make_recording(Path(tmp) / "mp4v.mp4", "mp4v")
+        real_which = shutil.which
+        p4_web_review.shutil.which = lambda n, *a, **k: (
+            None if n == "ffmpeg" else real_which(n, *a, **k))
+        try:
+            s = p4_session(out, vid)
+            s._init_scrub_source()
+        finally:
+            p4_web_review.shutil.which = real_which
+        assert s.proxy_state == "unavailable"
+        assert "make ffmpeg" in s.proxy_msg
+        before = len(s.keyframes)
+        s.handle({"type": "insert", "frame_index": 0})
+        assert len(s.keyframes) == before and not s.pending_inserts
 
 
 # ── P7 ───────────────────────────────────────────────────────

@@ -124,9 +124,15 @@ const KEY2ACT = { "1": "keep", "2": "dup", "3": "occlusion", "4": "other",
 const S = {
   mode: "double", fps: 30, kfs: [], actions: {}, validated: new Set(),
   watch: {}, inserts: 0, cur: 0, geom: {},   // idx -> last 'frame' payload
-  centerGuide: false, hasVideo: false, smoothed: [],
+  centerGuide: false, hasVideo: false, smoothed: [], frames: 0,
   ed: null,          // editor state or null
   scrubOpen: false, scrubFrame: 0,
+  // scrubReady goes true only once the <video> reports its metadata. Until
+  // then every position reads as frame 0, so Grab must not fire: that is
+  // what silently inserted frame 0 when the recording's codec was one the
+  // browser could not decode.
+  scrubReady: false,
+  proxy: { state: "none", pct: 0, message: "" },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -150,6 +156,13 @@ function onMsg(m) {
     hints(); show(S.cur);
   } else if (m.type === "signal") {
     S.hasVideo = m.video; S.smoothed = m.smoothed;
+  } else if (m.type === "proxy") {
+    const was = S.proxy.state;
+    S.proxy = { state: m.state, pct: m.pct, message: m.message };
+    S.frames = m.frames || S.frames;
+    insertLabel();
+    if (was === "building" && m.state === "ready") toast("Scrub proxy ready — Insert is live");
+    if (m.state === "unavailable") toast(`Insert unavailable: ${m.message}`);
   } else if (m.type === "frame") {
     S.geom[m.idx] = m;
     if (m.idx === S.cur) render();
@@ -554,25 +567,56 @@ $("finishbtn").addEventListener("click", () => send({ type: "finish" }));
 
 const vid = $("scrubvid"), range = $("scrubrange");
 
+function insertLabel() {
+  const p = S.proxy;
+  $("insertbtn").textContent =
+    p.state === "building" ? `  I  Insert Frame (proxy ${p.pct}%)`
+    : p.state === "unavailable" ? "  I  Insert Frame (unavailable)"
+    : "  I  Insert Frame";
+}
+
 function openScrub() {
   if (!S.hasVideo) { toast("no recording available for insert"); return; }
+  // The recording's codec isn't one the browser can play, so the server is
+  // transcoding a proxy to scrub. Opening now would show a black panel with
+  // a dead slider — say so instead.
+  if (S.proxy.state === "building") {
+    toast(`Preparing the scrub proxy — ${S.proxy.pct}%. Insert works once it lands.`);
+    return;
+  }
+  if (S.proxy.state === "unavailable") { toast(`Insert unavailable: ${S.proxy.message}`); return; }
   S.scrubOpen = true;
+  S.scrubReady = false;
   $("scrub").classList.add("open");
+  $("scrubinfo").textContent = "loading the recording…";
   if (!vid.src) vid.src = "/video";
   const start = S.kfs[S.cur] ? S.kfs[S.cur].frame_index : 0;
   const ready = () => {
-    range.max = Math.max(0, Math.round(vid.duration * S.fps) - 1);
+    // The server's frame count is authoritative; vid.duration is the
+    // fallback for a recording it could not probe.
+    range.max = S.frames ? S.frames - 1
+                         : Math.max(0, Math.round(vid.duration * S.fps) - 1);
+    S.scrubReady = true;
     setScrubFrame(start);
   };
   if (vid.readyState >= 1) ready();
   else vid.addEventListener("loadedmetadata", ready, { once: true });
 }
+vid.addEventListener("error", () => {
+  if (!S.scrubOpen) return;
+  const e = vid.error;
+  closeScrub();
+  toast(`The browser cannot play this recording (${e ? e.message || e.code : "media error"}) — `
+        + "use `make review` for inserts");
+});
 function closeScrub() {
   S.scrubOpen = false;
+  S.scrubReady = false;
   $("scrub").classList.remove("open");
   vid.pause();
 }
 function setScrubFrame(f) {
+  if (!S.scrubReady) return;      // no timeline yet: every f would clamp to 0
   f = Math.max(0, Math.min(f, +range.max || 0));
   S.scrubFrame = f;
   vid.currentTime = (f + 0.5) / S.fps;
@@ -585,7 +629,10 @@ function setScrubFrame(f) {
 }
 range.addEventListener("input", () => setScrubFrame(+range.value));
 $("scrubgrab").addEventListener("click", grab);
-function grab() { send({ type: "insert", frame_index: S.scrubFrame }); }
+function grab() {
+  if (!S.scrubReady) { toast("the recording hasn't loaded — nothing to grab yet"); return; }
+  send({ type: "insert", frame_index: S.scrubFrame });
+}
 function scrubKeys(ev) {
   const step = ev.shiftKey ? 30 : 1;
   if (ev.key === "ArrowRight") setScrubFrame(S.scrubFrame + step);

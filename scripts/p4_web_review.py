@@ -9,7 +9,10 @@ and geometry and sends keys back. Exists for the same reason p0_web_capture
 does: on ChromeOS the Tk window fights the container's compositor (panels
 clip off small screens) and the Tk scrubber software-decodes 4K per keypress.
 In the browser the scrubber is a native <video> element — hardware decode,
-instant seeks — served straight from the recording with HTTP Range support.
+instant seeks — served with HTTP Range support from the recording, or from
+a small H.264 proxy of it when the recording's codec is one no browser can
+play (OpenCV's "mp4v" default is MPEG-4 Part 2, which none of them do).
+The proxy is a one-time background transcode cached in data/.
 
 State written on Save is byte-compatible with the Tk review: keyframes.json
 (actions applied, crop_quad/gutter/rotation overrides, crop_quad_track from
@@ -30,6 +33,8 @@ C center guide, Ctrl+S save.
 import argparse
 import copy
 import json
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -70,6 +75,17 @@ from webui import (
 ACTIONS = ("keep", "dup", "occlusion", "other", "cover", "doc_start")
 DELETES = ("dup", "occlusion", "other")
 
+# FourCCs a <video> element can actually decode, as OpenCV reports them.
+# Recordings written with OpenCV's "mp4v" are MPEG-4 Part 2 (reported
+# 'FMP4'), which no browser plays: the scrubber's <video> failed with
+# DEMUXER_ERROR_NO_SUPPORTED_STREAMS, so loadedmetadata never fired, the
+# slider stayed pinned at 0 and Grab silently inserted frame 0. For those
+# we transcode a small H.264 proxy once and scrub that; the grabbed frame
+# still comes from the original at full resolution.
+BROWSER_FOURCC = {"avc1", "h264", "vp09", "vp80", "av01"}
+PROXY_HEIGHT = 720      # enough to recognize a page mid-turn
+PROXY_CRF = "28"        # ~11 MB per minute of 4K source
+
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Phase 4: Review keyframes in the browser")
@@ -109,6 +125,17 @@ class ReviewSession:
             np.load(str(sm_path)) if sm_path.exists() else np.zeros(1)
         )
         self.video_path = self._find_video(args.video_path)
+
+        # Scrub source: the original when the browser can decode it, an
+        # H.264 proxy otherwise. States: "none" (no recording), "native",
+        # "building", "ready", "unavailable".
+        self.proxy_path = paths.data / "scrub_proxy.mp4"
+        self.video_frames = 0
+        self.proxy_state = "none"
+        self.proxy_pct = 0
+        self.proxy_msg = ""
+        self._proxy_proc = None
+        self._proxy_thread = None
 
         # The consensus vote (and with it the first watchdog scan) runs in
         # the background AFTER the first state reaches the browser. On a
@@ -195,6 +222,15 @@ class ReviewSession:
             "watch": watch,
         }
 
+    def _proxy_msg(self):
+        return {
+            "type": "proxy",
+            "state": self.proxy_state,
+            "pct": self.proxy_pct,
+            "message": self.proxy_msg,
+            "frames": self.video_frames,
+        }
+
     def hello(self):
         self.send(self._state_msg())
         # The smoothed motion signal feeds the scrubber's readout. One-time,
@@ -204,8 +240,155 @@ class ReviewSession:
             "video": self.video_path is not None,
             "smoothed": [round(float(v), 2) for v in self.smoothed],
         })
+        self._init_scrub_source()
         if self.mode == "double":
             threading.Thread(target=self._init_geometry, daemon=True).start()
+
+    # ── Scrub source: the recording, or an H.264 proxy of it ─────
+
+    def scrub_video(self):
+        """The file /video serves — what the browser scrubs."""
+        if self.proxy_state == "ready":
+            return self.proxy_path
+        return self.video_path
+
+    @staticmethod
+    def _probe(path):
+        """(fourcc tag, frame count) for a video, ('', 0) if unreadable."""
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            return "", 0
+        code = int(cap.get(cv2.CAP_PROP_FOURCC))
+        n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        tag = "".join(chr((code >> (8 * i)) & 0xFF) for i in range(4)).strip()
+        return tag, n
+
+    def _init_scrub_source(self):
+        """Decide what the scrubber plays, and start the transcode if needed.
+
+        Runs on the connect path but only opens the file's header, so it
+        costs milliseconds. The transcode itself is a background thread —
+        the review stays fully usable while it runs; only Insert waits.
+        """
+        if self.video_path is None:
+            return
+        fourcc, frames = self._probe(self.video_path)
+        self.video_frames = frames
+        if fourcc.lower() in BROWSER_FOURCC:
+            self.proxy_state = "native"
+            self.send(self._proxy_msg())
+            return
+        # A proxy from an earlier review is reusable if it still lines up
+        # frame-for-frame with the recording — the scrubber addresses it by
+        # frame index, so a truncated one would grab the wrong frame.
+        if self.proxy_path.exists():
+            _, pframes = self._probe(self.proxy_path)
+            if frames and abs(pframes - frames) <= 1:
+                self.proxy_state = "ready"
+                self.proxy_pct = 100
+                log(f"  Scrub proxy: reusing {self.proxy_path}")
+                self.send(self._proxy_msg())
+                return
+            log("  Scrub proxy: stale (frame count differs) — rebuilding")
+        if shutil.which("ffmpeg") is None:
+            self.proxy_state = "unavailable"
+            self.proxy_msg = (
+                f"the recording is {fourcc or 'an unsupported codec'}, which "
+                "Chrome cannot decode, and ffmpeg is not installed to make a "
+                "proxy — run `make ffmpeg`, or use `make review` for inserts"
+            )
+            log(f"  Scrub proxy: {self.proxy_msg}")
+            self.send(self._proxy_msg())
+            return
+        self.proxy_state = "building"
+        self.proxy_msg = f"transcoding a {PROXY_HEIGHT}p H.264 proxy"
+        log(f"  Recording is {fourcc} — no browser plays it. Building a "
+            f"{PROXY_HEIGHT}p H.264 scrub proxy in the background:")
+        log(f"    {self.proxy_path}")
+        log("    The review is usable now; only Insert waits. Reloading the "
+            "tab restarts the transcode.")
+        self.send(self._proxy_msg())
+        self._proxy_thread = threading.Thread(target=self._build_proxy,
+                                              daemon=True)
+        self._proxy_thread.start()
+
+    def _build_proxy(self):
+        """Transcode the recording to a small, seekable H.264 proxy.
+
+        Same frame rate and frame count as the source, so the scrubber's
+        frame ↔ time arithmetic is unchanged and the index it grabs still
+        addresses the original. Written to a .part file and renamed on
+        success, so an interrupted run never leaves a proxy that looks
+        complete. Measured: 24k frames of 4K in ~2.5 min, 150 MB.
+        """
+        tmp = self.proxy_path.with_suffix(".part.mp4")
+        self.proxy_path.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error", "-progress", "pipe:1",
+            "-nostats", "-i", str(self.video_path),
+            "-vf", f"scale=-2:'min({PROXY_HEIGHT},ih)'",
+            "-r", f"{self.fps:g}",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", PROXY_CRF,
+            "-g", "30",                       # short GOP: snappy seeks
+            "-pix_fmt", "yuv420p", "-an", str(tmp),
+        ]
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True)
+        except OSError as e:
+            self._proxy_failed(f"ffmpeg: {e}")
+            return
+        self._proxy_proc = proc
+        err_chunks = []
+        drain = threading.Thread(
+            target=lambda: err_chunks.append(proc.stderr.read()), daemon=True)
+        drain.start()
+        total = self.video_frames or 0
+        last_sent = -1
+        for line in proc.stdout:
+            key, _, val = line.strip().partition("=")
+            if key != "frame" or not total:
+                continue
+            try:
+                pct = min(99, int(100 * int(val) / total))
+            except ValueError:
+                continue
+            if pct > last_sent:
+                last_sent = pct
+                self.proxy_pct = pct
+                if not self._closed:
+                    self.send(self._proxy_msg())
+        proc.wait()
+        drain.join(timeout=5)
+        self._proxy_proc = None
+        if self._closed:
+            tmp.unlink(missing_ok=True)
+            return
+        if proc.returncode != 0:
+            tmp.unlink(missing_ok=True)
+            err = (err_chunks[0] if err_chunks else "").strip()
+            self._proxy_failed(f"ffmpeg: {err[:300]}")
+            return
+        _, pframes = self._probe(tmp)
+        if total and abs(pframes - total) > 1:
+            log(f"  WARNING: proxy has {pframes} frames, recording has "
+                f"{total} — scrub positions may be off by a frame or two.")
+        tmp.replace(self.proxy_path)
+        self.proxy_state = "ready"
+        self.proxy_pct = 100
+        self.proxy_msg = ""
+        log(f"  Scrub proxy ready ({pframes} frames, "
+            f"{self.proxy_path.stat().st_size / 1e6:.0f} MB) — Insert is live.")
+        self.send(self._proxy_msg())
+
+    def _proxy_failed(self, why):
+        self.proxy_state = "unavailable"
+        self.proxy_msg = (f"could not build the scrub proxy ({why}) — use "
+                          "`make review` for inserts")
+        log(f"  ERROR: {self.proxy_msg}")
+        if not self._closed:
+            self.send(self._proxy_msg())
 
     def _init_geometry(self):
         """Vote the consensus box off the connect path, then start tracking.
@@ -231,6 +414,12 @@ class ReviewSession:
     def close(self):
         self._closed = True
         self._stop_watchdog()
+        proc = self._proxy_proc
+        if proc is not None and proc.poll() is None:
+            # The transcode belongs to this session's browser. A reconnect
+            # builds a fresh one rather than racing two encoders onto the
+            # same .part file.
+            proc.terminate()
 
     # ── Inbound ──────────────────────────────────────────────
 
@@ -602,6 +791,19 @@ class ReviewSession:
         if self.video_path is None:
             self.send({"type": "notice", "text": "No recording available."})
             return
+        # Belt and braces: a scrubber whose <video> never loaded reports
+        # frame 0 for every position, so refuse the grab rather than
+        # quietly inserting the first frame of the recording.
+        if self.proxy_state in ("building", "unavailable"):
+            self.send({"type": "notice",
+                       "text": "Scrub proxy not ready — nothing inserted."})
+            return
+        if self.video_frames and not (0 <= frame_idx < self.video_frames):
+            self.send({"type": "notice",
+                       "text": f"Frame {frame_idx} is outside the recording."})
+            return
+        # The grab always comes from the original recording, never the
+        # downscaled proxy: the proxy is a viewfinder, not a source.
         cap = cv2.VideoCapture(str(self.video_path))
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
         ok, frame = cap.read()
@@ -932,7 +1134,7 @@ def build_server(args):
             return True
         if path == "/video":
             s = session_box.get("s")
-            video = s.video_path if s else None
+            video = s.scrub_video() if s else None
             if video is None:
                 handler.send_error(404)
             else:

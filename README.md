@@ -240,6 +240,8 @@ Tkinter GUI for reviewing and correcting the keyframe selection. This phase is r
 
 Prefer the browser on ChromeOS (or any small screen): `make review-web VIDEO=...` serves the same review to Chrome at `http://localhost:8412` — identical state, keys, and save format, with the insert scrubber as a native `<video>` (hardware decode, instant seeking, vs. a software 4K decode per keypress in Tk). All ScanStudio web apps share port 8412 (they run serially), so the one ChromeOS forwarding rule from `live-web` already covers this.
 
+Recordings are written as `mp4v` (MPEG-4 Part 2), which no browser plays — it encodes about twice as fast as H.264 at 4K, and a real-time 4K capture needs that headroom. So the web review transcodes a 720p H.264 scrub proxy once, in the background: an ffmpeg pass of roughly a minute per 10 minutes of recording, cached at `output/<name>/data/scrub_proxy.mp4`. The review is fully usable while it runs — only `I` waits, and the Insert button shows the progress. Grabbed frames always come from the original recording at full resolution. Recording with `--codec h264` (via `p0_live_capture.py`) skips the proxy at the cost of encoder throughput; recordings that are already H.264 are scrubbed directly.
+
 **Keys:**
 
 | Key | Action |

@@ -43,6 +43,7 @@ from utils import (
     CAMERA_SCAN_RANGE,
     camera_backend,
     camera_label,
+    open_video_writer,
     prepare_capture,
     sound_player,
 )
@@ -198,6 +199,12 @@ def main():
     p.add_argument("--capture-height", type=int, default=2160,
                    help="Requested capture height (default 2160 = 4K UHD)")
     p.add_argument("--fps", type=float, default=30.0, help="Recording / timing fps")
+    p.add_argument("--codec", default="mp4v", choices=["mp4v", "h264", "auto"],
+                   help="Recording codec. The default mp4v is ~2x faster to "
+                        "encode at 4K, which a real-time capture needs; the "
+                        "browser review transcodes a scrub proxy for it once. "
+                        "h264 records browser-playable video straight away, at "
+                        "half the encoder throughput — fine below 4K")
     p.add_argument("--analysis-height", type=int, default=360)
     p.add_argument("--preview-height", type=int, default=720,
                    help="Height of the on-screen preview. The full-res frame is "
@@ -243,11 +250,15 @@ def main():
     log(f"Thresholds: settle<{args.settle_threshold} turn>{args.turn_threshold}, "
         f"settle_time={args.settle_time}s")
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(args.video_out, fourcc, args.fps, (orig_w, orig_h))
-    if not writer.isOpened():
+    writer, codec = open_video_writer(args.video_out, args.fps,
+                                      (orig_w, orig_h), args.codec)
+    if writer is None:
         log(f"ERROR: Cannot open VideoWriter for {args.video_out}")
         sys.exit(1)
+    if codec != "avc1" and args.codec != "mp4v":
+        log(f"WARNING: asked for H.264 but this OpenCV build wrote {codec} — "
+            "`make review-web` will transcode a scrub proxy for its insert "
+            "scrubber. `make review` is unaffected.")
 
     # Encode on a background thread so the 4K software encode never stalls the
     # capture/preview loop. Frames are queued read-only: cap.read() hands back a

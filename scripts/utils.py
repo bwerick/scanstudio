@@ -88,6 +88,33 @@ def camera_label(idx: int) -> str:
     return f"index {idx} (/dev/video{idx})" if IS_LINUX else f"index {idx}"
 
 
+# Recording codecs, in preference order per choice. "mp4v" writes MPEG-4
+# Part 2, which no browser decodes — P4's web review can't scrub such a
+# recording in its <video> and transcodes a proxy first. "avc1" is real
+# H.264 and needs no proxy, but it is roughly half as fast: measured on
+# 150 consecutive 4K frames of an actual page turn, mp4v sustained 21.5
+# fps and avc1 10.2. Live capture at 4K is already encoder-bound, so
+# real-time recording keeps mp4v and pays the one-time proxy instead;
+# offline passes (normalize) prefer H.264, where throughput is free.
+VIDEO_CODECS = {"auto": ("avc1", "mp4v"), "h264": ("avc1",), "mp4v": ("mp4v",)}
+
+
+def open_video_writer(path, fps: float, size, codec: str = "auto"):
+    """Open a VideoWriter for ``path``, preferring H.264.
+
+    Returns ``(writer, fourcc)``; ``(None, "")`` if no codec opened. The
+    fourcc that won is the caller's to report — it decides whether the
+    recording is playable in the browser review.
+    """
+    for tag in VIDEO_CODECS[codec]:
+        writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*tag),
+                                 fps, size)
+        if writer.isOpened():
+            return writer, tag
+        writer.release()
+    return None, ""
+
+
 # Save accelerator: ⌘S is the macOS convention, Ctrl+S everywhere else.
 SAVE_ACCEL = "<Command-s>" if IS_MAC else "<Control-s>"
 SAVE_LABEL = "⌘S" if IS_MAC else "Ctrl+S"

@@ -55,7 +55,7 @@ import numpy as np
 
 from live_state import LiveDetector, keyframe_record
 from miniws import CLOSE, TEXT, WebSocket, accept_key
-from utils import ProjectPaths, log
+from utils import ProjectPaths, log, open_video_writer
 
 # Binary message tags (first byte of every binary WebSocket message).
 MSG_FRAME = 1    # [u8 1][f64 ts_us][u16 w][u16 h][w*h gray]      browser -> server
@@ -163,9 +163,8 @@ def normalize_recording(raw_path, out_path, fps, use_ffmpeg=None, progress=None)
             break
         if writer is None:
             h, w = frame.shape[:2]
-            writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"),
-                                     fps, (w, h))
-            if not writer.isOpened():
+            writer, _ = open_video_writer(out_path, fps, (w, h))
+            if writer is None:
                 cap.release()
                 return "failed: OpenCV cannot open the output writer"
         while prev is not None and out_n * 1000.0 / fps < t_ms - 500.0 / fps:
