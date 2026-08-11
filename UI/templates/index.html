@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ScanStudio</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Top nav bar -->
+    <nav id="navbar">
+        <div class="nav-brand" onclick="navigate('home')">
+            <span class="brand-icon">📖</span>
+            <span class="brand-text">ScanStudio</span>
+        </div>
+        <div id="nav-breadcrumbs" class="nav-crumbs"></div>
+        <div class="nav-right">
+            <span id="nav-project" class="nav-project"></span>
+        </div>
+    </nav>
+
+    <!-- Main content area (views swap here) -->
+    <main id="app">
+
+        <!-- HOME VIEW -->
+        <div id="view-home" class="view active">
+            <div class="home-container">
+                <h1>ScanStudio</h1>
+                <p class="subtitle">Video-to-PDF Book Scanner</p>
+
+                <!-- New project -->
+                <section class="card">
+                    <h2>New Project</h2>
+                    <div class="card-body">
+                        <div id="recording-list" class="file-list">
+                            <p class="muted">Loading recordings...</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Existing projects -->
+                <section class="card">
+                    <h2>Projects</h2>
+                    <div id="project-list" class="project-grid">
+                        <p class="muted">Loading...</p>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- PROCESSING VIEW -->
+        <div id="view-processing" class="view">
+            <div class="processing-container">
+                <h2 id="proc-title">Processing...</h2>
+                <div class="progress-bar-container">
+                    <div id="proc-bar" class="progress-bar" style="width: 0%"></div>
+                </div>
+                <p id="proc-status" class="muted">Starting...</p>
+                <div id="proc-plot" class="plot-container"></div>
+                <div id="proc-actions" class="actions" style="display:none">
+                    <button class="btn btn-primary" id="proc-next">Continue →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- REVIEW VIEW -->
+        <div id="view-review" class="view">
+            <div class="review-container">
+                <!-- Top bar with mode and stats -->
+                <div class="review-header">
+                    <div class="review-mode">
+                        <button class="btn btn-sm" id="mode-double" onclick="setMode('double')">📖 2-Page</button>
+                        <button class="btn btn-sm" id="mode-single" onclick="setMode('single')">📄 1-Page</button>
+                    </div>
+                    <div id="review-stats" class="review-stats"></div>
+                    <div class="review-actions">
+                        <button class="btn btn-sm" onclick="toggleView('grid')">Grid</button>
+                        <button class="btn btn-sm" onclick="toggleView('quad')">4-Up</button>
+                        <button class="btn btn-sm" onclick="toggleView('single')">Single</button>
+                    </div>
+                </div>
+
+                <!-- Grid view -->
+                <div id="review-grid" class="review-grid"></div>
+
+                <!-- Quad (4-up) view -->
+                <div id="review-quad" class="review-quad" style="display:none">
+                    <div class="quad-grid" id="quad-images"></div>
+                    <div class="quad-nav">
+                        <button class="btn" onclick="quadPrev()">← Prev 4</button>
+                        <span id="quad-counter"></span>
+                        <button class="btn" onclick="quadNext()">Next 4 →</button>
+                    </div>
+                </div>
+
+                <!-- Single frame view -->
+                <div id="review-single" class="review-single" style="display:none">
+                    <div class="single-image-container">
+                        <canvas id="review-canvas"></canvas>
+                    </div>
+                    <div class="single-info" id="single-info"></div>
+                    <div class="single-nav">
+                        <button class="btn" onclick="singlePrev()">← Prev (A)</button>
+                        <span id="single-counter"></span>
+                        <button class="btn" onclick="singleNext()">Next (D) →</button>
+                    </div>
+                    <div class="single-actions">
+                        <button class="btn btn-green" onclick="labelFrame('keep')">1 Keep</button>
+                        <button class="btn btn-yellow" onclick="labelFrame('dup')">2 Duplicate</button>
+                        <button class="btn btn-pink" onclick="labelFrame('occlusion')">3 Occlusion</button>
+                        <button class="btn btn-gray" onclick="labelFrame('other')">4 Other</button>
+                        <button class="btn btn-blue" onclick="labelFrame('cover')">5 Cover</button>
+                        <button class="btn btn-purple" onclick="labelFrame('doc_start')">6 Doc Start</button>
+                        <button class="btn btn-blue" onclick="openScrubber()">I Insert</button>
+                    </div>
+                </div>
+
+                <!-- Bottom action bar -->
+                <div class="review-bottom">
+                    <button class="btn btn-primary" onclick="saveReview()">Save & Continue →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- CROP & SPLIT VIEW -->
+        <div id="view-crop" class="view">
+            <div class="crop-container">
+                <h2>Crop & Split Preview</h2>
+                <div class="crop-preview">
+                    <div class="crop-original">
+                        <h3>Original</h3>
+                        <img id="crop-original-img">
+                    </div>
+                    <div class="crop-result">
+                        <h3>Cropped</h3>
+                        <img id="crop-result-img">
+                    </div>
+                </div>
+                <div class="crop-nav">
+                    <button class="btn" onclick="cropPrev()">← Prev</button>
+                    <span id="crop-counter"></span>
+                    <button class="btn" onclick="cropNext()">Next →</button>
+                </div>
+                <div class="crop-actions">
+                    <button class="btn btn-primary" onclick="applyCropAll()">Apply to All & Continue →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- EXPORT VIEW -->
+        <div id="view-export" class="view">
+            <div class="export-container">
+                <h2>Export</h2>
+                <div class="export-options">
+                    <label class="checkbox">
+                        <input type="checkbox" id="export-bw"> Black & White version
+                    </label>
+                </div>
+                <button class="btn btn-primary" onclick="buildPdf()">Build PDF</button>
+                <div id="export-status" class="muted"></div>
+            </div>
+        </div>
+
+        <!-- VIDEO SCRUBBER MODAL -->
+        <div id="scrubber-modal" class="modal" style="display:none">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Find Missing Frame</h3>
+                    <button class="modal-close" onclick="closeScrubber()">✕</button>
+                </div>
+                <div class="scrubber-image">
+                    <img id="scrubber-img">
+                </div>
+                <div class="scrubber-info" id="scrubber-info"></div>
+                <div class="scrubber-controls">
+                    <button class="btn" onclick="scrubStep(-30)">◀◀ -30</button>
+                    <button class="btn" onclick="scrubStep(-5)">◀ -5</button>
+                    <button class="btn" onclick="scrubStep(-1)">◀ -1</button>
+                    <button class="btn" onclick="scrubStep(1)">+1 ▶</button>
+                    <button class="btn" onclick="scrubStep(5)">+5 ▶</button>
+                    <button class="btn" onclick="scrubStep(30)">+30 ▶▶</button>
+                </div>
+                <div class="scrubber-actions">
+                    <button class="btn btn-green" onclick="grabFrame()">✓ Grab This Frame</button>
+                    <button class="btn" onclick="closeScrubber()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
