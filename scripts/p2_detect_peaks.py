@@ -15,11 +15,11 @@ from pathlib import Path
 import numpy as np
 from scipy.signal import find_peaks
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from utils import log, ProjectPaths, check_overwrite
-
 
 DEFAULT_PEAK_HEIGHT = 5.0
 DEFAULT_PEAK_DISTANCE_SEC = 1.5
@@ -35,11 +35,15 @@ def build_spread_list(peaks, total_len):
     for i in range(len(peaks) - 1):
         boundaries.append((int(peaks[i]), int(peaks[i + 1])))
     boundaries.append((int(peaks[-1]), total_len))
-    return [{"spread_index": i+1, "start_frame": s, "end_frame": e, "frame_count": e-s}
-            for i, (s, e) in enumerate(boundaries)]
+    return [
+        {"spread_index": i + 1, "start_frame": s, "end_frame": e, "frame_count": e - s}
+        for i, (s, e) in enumerate(boundaries)
+    ]
 
 
-def rescue_missed_turns(smoothed, fps, peaks, long_sec, valley_motion, valley_min_sec, valley_peak):
+def rescue_missed_turns(
+    smoothed, fps, peaks, long_sec, valley_motion, valley_min_sec, valley_peak
+):
     spreads = build_spread_list(peaks, len(smoothed))
     additional = []
     for i, sp in enumerate(spreads):
@@ -68,7 +72,9 @@ def rescue_missed_turns(smoothed, fps, peaks, long_sec, valley_motion, valley_mi
                         sf = s + gs + np.argmax(region[gs:ge])
                         if min(abs(sf - p) for p in peaks) > int(0.8 * fps):
                             additional.append(sf)
-                            log(f"  Rescued: spread {i+1} at {sf/fps:.1f}s (peak={gm:.1f})")
+                            log(
+                                f"  Rescued: spread {i+1} at {sf/fps:.1f}s (peak={gm:.1f})"
+                            )
     if additional:
         all_peaks = np.sort(np.concatenate([peaks, np.array(additional)]))
         log(f"Pass 2: {len(additional)} rescued → {len(all_peaks)} total peaks")
@@ -83,8 +89,16 @@ def generate_plot(smoothed, peaks, spreads, fps, output_path):
 
     ax = axes[0]
     ax.plot(times, smoothed, linewidth=0.4, color="steelblue")
-    ax.plot(peaks / fps, smoothed[peaks], "rv", markersize=5, label=f"Page turns ({len(peaks)})")
+    ax.plot(
+        peaks / fps,
+        smoothed[peaks],
+        "rv",
+        markersize=5,
+        label=f"Page turns ({len(peaks)})",
+    )
     ax.set_title(f"Peak Detection — {len(peaks)} turns → {len(spreads)} spreads")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Mean Pixel Difference")
     ax.legend()
 
     ax = axes[1]
@@ -94,15 +108,26 @@ def generate_plot(smoothed, peaks, spreads, fps, output_path):
     ax.plot(pm / fps, smoothed[pm], "rv", markersize=7)
     for i, sp in enumerate(spreads):
         ts, te = sp["start_frame"] / fps, sp["end_frame"] / fps
-        if ts > 120: break
-        if i % 2 == 0: ax.axvspan(ts, min(te, 120), alpha=0.08, color="green")
+        if ts > 120:
+            break
+        if i % 2 == 0:
+            ax.axvspan(ts, min(te, 120), alpha=0.08, color="green")
     ax.set_title("First 120s — Spreads shaded")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Mean Pixel Difference")
 
     ax = axes[2]
     durs = [sp["duration_sec"] for sp in spreads]
     ax.hist(durs, bins=40, color="steelblue", edgecolor="white")
-    ax.axvline(x=np.median(durs), color="red", linestyle="--", label=f"Median: {np.median(durs):.2f}s")
+    ax.axvline(
+        x=np.median(durs),
+        color="red",
+        linestyle="--",
+        label=f"Median: {np.median(durs):.2f}s",
+    )
     ax.set_title("Spread Duration Distribution")
+    ax.set_xlabel("Spread Duration (s)")
+    ax.set_ylabel("Count")
     ax.legend()
 
     plt.tight_layout()
@@ -119,7 +144,9 @@ def main():
     parser.add_argument("--long-spread", type=float, default=DEFAULT_LONG_SPREAD_SEC)
     parser.add_argument("--valley-motion", type=float, default=DEFAULT_VALLEY_MOTION)
     parser.add_argument("--valley-min-sec", type=float, default=DEFAULT_VALLEY_MIN_SEC)
-    parser.add_argument("--valley-peak", type=float, default=DEFAULT_VALLEY_PEAK_THRESHOLD)
+    parser.add_argument(
+        "--valley-peak", type=float, default=DEFAULT_VALLEY_PEAK_THRESHOLD
+    )
     args = parser.parse_args()
 
     log("=" * 60)
@@ -144,12 +171,23 @@ def main():
     fps = metadata["fps"]
     log(f"  {len(smoothed)} values, {fps} fps")
 
-    peaks, _ = find_peaks(smoothed, height=args.peak_height,
-                           distance=int(args.min_distance * fps), prominence=args.prominence)
+    peaks, _ = find_peaks(
+        smoothed,
+        height=args.peak_height,
+        distance=int(args.min_distance * fps),
+        prominence=args.prominence,
+    )
     log(f"Pass 1: {len(peaks)} peaks")
 
-    peaks = rescue_missed_turns(smoothed, fps, peaks, args.long_spread,
-                                 args.valley_motion, args.valley_min_sec, args.valley_peak)
+    peaks = rescue_missed_turns(
+        smoothed,
+        fps,
+        peaks,
+        args.long_spread,
+        args.valley_motion,
+        args.valley_min_sec,
+        args.valley_peak,
+    )
 
     spreads = build_spread_list(peaks, len(smoothed))
     for sp in spreads:
@@ -160,10 +198,16 @@ def main():
     np.save(str(out_peaks), peaks)
     (paths.json / "spreads.json").write_text(json.dumps(spreads, indent=2))
 
-    peaks_meta = {"fps": fps, "parameters": {
-        "peak_height": args.peak_height, "min_distance_sec": args.min_distance,
-        "prominence": args.prominence, "long_spread_sec": args.long_spread,
-    }, "results": {"total_peaks": int(len(peaks)), "total_spreads": len(spreads)}}
+    peaks_meta = {
+        "fps": fps,
+        "parameters": {
+            "peak_height": args.peak_height,
+            "min_distance_sec": args.min_distance,
+            "prominence": args.prominence,
+            "long_spread_sec": args.long_spread,
+        },
+        "results": {"total_peaks": int(len(peaks)), "total_spreads": len(spreads)},
+    }
     (paths.json / "peaks_metadata.json").write_text(json.dumps(peaks_meta, indent=2))
 
     generate_plot(smoothed, peaks, spreads, fps, str(paths.plots / "peaks_plot.png"))
