@@ -77,6 +77,11 @@
                         <button class="btn btn-sm" onclick="toggleView('grid')">Grid</button>
                         <button class="btn btn-sm" onclick="toggleView('quad')">4-Up</button>
                         <button class="btn btn-sm" onclick="toggleView('single')">Single</button>
+                        <label class="grid-size-ctrl">
+                            <input type="range" id="grid-size" min="2" max="8" value="4"
+                                   oninput="updateGridSize(this.value)">
+                            <span id="grid-size-val">4</span>/row
+                        </label>
                     </div>
                 </div>
 
@@ -127,22 +132,20 @@
             <div class="crop-container">
                 <h2>Crop & Split Preview</h2>
                 <div class="crop-preview">
-                    <div class="crop-original">
+                    <div>
                         <h3>Original</h3>
                         <img id="crop-original-img">
                     </div>
-                    <div class="crop-result">
+                    <div>
                         <h3>Cropped</h3>
                         <img id="crop-result-img">
                     </div>
                 </div>
-                <div class="crop-nav">
-                    <button class="btn" onclick="cropPrev()">← Prev</button>
-                    <span id="crop-counter"></span>
-                    <button class="btn" onclick="cropNext()">Next →</button>
-                </div>
-                <div class="crop-actions">
-                    <button class="btn btn-primary" onclick="applyCropAll()">Apply to All & Continue →</button>
+                <div class="crop-bottom">
+                    <button class="btn" onclick="cropPrev()">← Prev (A)</button>
+                    <span class="crop-counter" id="crop-counter"></span>
+                    <button class="btn" onclick="cropNext()">Next (D) →</button>
+                    <button class="btn btn-primary" onclick="applyCropAll()" style="margin-left:24px">Apply to All & Continue →</button>
                 </div>
             </div>
         </div>
@@ -150,14 +153,18 @@
         <!-- EXPORT VIEW -->
         <div id="view-export" class="view">
             <div class="export-container">
-                <h2>Export</h2>
-                <div class="export-options">
-                    <label class="checkbox">
-                        <input type="checkbox" id="export-bw"> Black & White version
-                    </label>
+                <div class="export-header">
+                    <h2>Export</h2>
+                    <div class="export-options">
+                        <label class="checkbox">
+                            <input type="checkbox" id="export-bw"> Black & White
+                        </label>
+                        <button class="btn btn-primary" onclick="buildPdf()">Build PDF</button>
+                        <span id="export-status" class="muted"></span>
+                    </div>
                 </div>
-                <button class="btn btn-primary" onclick="buildPdf()">Build PDF</button>
-                <div id="export-status" class="muted"></div>
+                <div id="export-thumbs" class="export-thumbs"></div>
+            </div>
             </div>
         </div>
 

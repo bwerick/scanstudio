@@ -3,23 +3,16 @@
 Phase 5: Crop Keyframes
 
 Two modes:
-  double (default): For book spreads — the frame's own manual crop box from
-           Phase-4 review (crop_quad) wins; then the Phase-4 boundary
-           tracker's box (crop_quad_track: the nearest earlier correction
-           translated to follow the book on this frame); then that
-           correction propagated verbatim; then the session's consensus box
-           (voted once from a sample of frames); per-frame page-mask
-           detection only as a last resort.
-  single: For loose documents — a per-frame manual crop_quad wins; otherwise
-           GrabCut segments the page from the table. Handles rotation, works
-           with any page color.
+  double (default): For book spreads — applies crop bounds + Otsu detection
+  single: For loose documents — uses GrabCut to segment page from table,
+           handles rotation, works with any page color
 
 Modifies images/ in-place. To restore originals, re-run Phase 3.
 
 Usage:
   python scripts/p5_crop.py output/mybook
   python scripts/p5_crop.py output/mybook --mode single
-  python scripts/p5_crop.py output/mybook --mode double --safety-margin 0.02
+  python scripts/p5_crop.py output/mybook --mode double --safety-margin 0.005
 """
 
 import argparse
@@ -31,118 +24,42 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from utils import (
-    log,
-    ProjectPaths,
-    check_overwrite,
-    consensus_geometry,
-    page_mask_robust,
-    resolve_rotation,
-    resolve_crop_quad,
-)
-
-# Breathing room kept around the detected spread bounds, as a fraction of the
-# frame. Bumped up from a hair-thin 0.005 because a tight crop that clips real
-# page content is far worse than a little extra table in the margin (the split
-# step finds the gutter regardless, and the binarizer drops the border). Phase 4
-# imports this so its split preview matches, and it is the per-frame default that
-# a keyframe's own ``crop_margin`` override replaces.
-DEFAULT_SAFETY_MARGIN = 0.02
+from utils import log, ProjectPaths, check_overwrite
 
 # ── Double-page crop (books) ─────────────────────────────────
 
 
-def _spread_tilt(mask, max_deg=8.0):
-    """Estimate spread rotation (degrees) from the mask's top edge.
-
-    The top edge of a flat-lying spread is a near-straight line; its slope is
-    the rotation. A robust (Huber) line fit ignores the finger/notch outliers,
-    and columns where the page runs off the top of the frame are skipped since
-    their "top" is the frame border, not the page. Returns 0 when the estimate
-    is implausibly large (mask too ragged to trust).
-    """
-    h, w = mask.shape
-    xs, ys = [], []
-    for x in range(0, w, 4):
-        col = np.where(mask[:, x] > 0)[0]
-        if len(col) and 2 < col[0] < h * 0.45:
-            xs.append(x)
-            ys.append(int(col[0]))
-    if len(xs) < 20:
-        return 0.0
-    pts = np.column_stack([xs, ys]).astype(np.float32)
-    vx, vy, _, _ = cv2.fitLine(pts, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
-    angle = float(np.degrees(np.arctan2(vy, vx)))
-    return angle if abs(angle) <= max_deg else 0.0
-
-
-def _mask_bounds(mask, min_frac=0.5):
-    """Robust page bounds ``(x, y, w, h)``, ignoring thin protrusions.
-
-    ``cv2.boundingRect`` spans the blob's maximum extent, so a page underneath
-    sticking out past the edge (or a finger) drags the crop outward and leaves
-    a band of table along the whole side. Instead, keep only the columns/rows
-    whose page coverage reaches ``min_frac`` of the peak coverage — a
-    protrusion spans a small fraction of the page height/width, so the bounds
-    snap to the page proper.
-    """
-    cols = (mask > 0).sum(axis=0)
-    rows = (mask > 0).sum(axis=1)
-    xs = np.where(cols >= cols.max() * min_frac)[0]
-    ys = np.where(rows >= rows.max() * min_frac)[0]
-    if not len(xs) or not len(ys):
-        return cv2.boundingRect(mask)
-    return int(xs[0]), int(ys[0]), int(xs[-1] + 1 - xs[0]), int(ys[-1] + 1 - ys[0])
-
-
-def crop_double_page(img, safety_pct, rotation_override=None):
-    """Deskew and isolate a book spread from a tinted table.
-
-    Replaces grayscale Otsu (which merges cream pages into light-brown wood)
-    with a page mask (HSV, with a U^2-Net backstop when that fails — see
-    page_mask_robust), measures the spread's tilt from the mask's top edge,
-    rotates to deskew, then tight-crops to the page bounds. Robust to rotation
-    and translation of the spread within the frame. The downstream split step
-    finds the gutter on the result, so this only has to straighten and frame
-    the spread.
-
-    ``rotation_override`` (degrees) replaces the auto-measured tilt when the
-    operator has corrected the deskew in Phase 4. p4's split preview calls this
-    with identical arguments, so the cropped result here matches what was shown.
-
-    Returns ``(cropped, method, (x0, y0, crop_w, crop_h))`` — the crop's origin
-    and size in deskewed-frame pixels — so a gutter measured on the crop, or
-    the crop box itself, can be mapped back onto the original frame.
-    """
+def crop_double_page(img, safety_pct):
+    """Otsu-based crop for book spreads."""
     h, w = img.shape[:2]
-    mask = page_mask_robust(img)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    if cv2.countNonZero(mask) < 0.2 * w * h:
-        # No page-sized bright region found — leave the frame essentially as-is.
-        mx, my = int(w * 0.02), int(h * 0.02)
-        return (
-            img[my : h - my, mx : w - mx],
-            "fallback",
-            (mx, my, w - 2 * mx, h - 2 * my),
-        )
+    kernel = np.ones((15, 15), np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
 
-    angle = rotation_override if rotation_override is not None else _spread_tilt(mask)
-    if abs(angle) > 0.2:
-        M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
-        img = cv2.warpAffine(
-            img, M, (w, h), flags=cv2.INTER_LINEAR, borderValue=(255, 255, 255)
-        )
-        mask = page_mask_robust(img)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    x, y, bw, bh = _mask_bounds(mask)
-    mx, my = int(w * safety_pct), int(h * safety_pct)
-    x0, x1 = max(0, x - mx), min(w, x + bw + mx)
-    y0, y1 = max(0, y - my), min(h, y + bh + my)
-    return (
-        img[y0:y1, x0:x1],
-        "hsv_deskew",
-        (x0, y0, x1 - x0, y1 - y0),
-    )
+    if contours:
+        largest = max(contours, key=cv2.contourArea)
+        area = cv2.contourArea(largest)
+        x, y, bw, bh = cv2.boundingRect(largest)
+
+        if area / (w * h) > 0.35 and bh / h > 0.7:
+            mx = int(w * safety_pct)
+            my = int(h * safety_pct)
+            return (
+                img[
+                    max(0, y - my) : min(h, y + bh + my),
+                    max(0, x - mx) : min(w, x + bw + mx),
+                ],
+                "otsu",
+            )
+
+    # Fallback
+    mx, my = int(w * 0.02), int(h * 0.02)
+    return img[my : h - my, mx : w - mx], "fallback"
 
 
 # ── Single-page crop (loose documents) ───────────────────────
@@ -160,14 +77,11 @@ def order_points(pts):
     return r
 
 
-def detect_page_quad(img):
-    """GrabCut-segment a loose page from the table; return its 4 corners.
-
-    Returns an ordered ``(tl, tr, br, bl)`` float32 array in full-image pixel
-    coordinates (the page's minimum-area rectangle), or ``None`` when no
-    confident page-sized region is found. Both the automatic crop
-    (``crop_single_page``) and the Phase-4 manual crop editor seed from this, so
-    the box the operator tunes starts exactly where the detector landed.
+def crop_single_page(img, padding_pct=0.01):
+    """
+    GrabCut-based crop for single loose documents.
+    Detects the document against the table, handles rotation,
+    and applies perspective correction to produce a straight rectangle.
     """
     h, w = img.shape[:2]
 
@@ -197,17 +111,19 @@ def detect_page_quad(img):
     fgd_model = np.zeros((1, 65), dtype=np.float64)
     cv2.grabCut(work, mask, None, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_MASK)
 
-    page = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(
+    page_mask = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(
         np.uint8
     )
 
     # Clean up mask
     kernel = np.ones((9, 9), np.uint8)
-    page = cv2.morphologyEx(page, cv2.MORPH_CLOSE, kernel, iterations=2)
-    page = cv2.morphologyEx(page, cv2.MORPH_OPEN, kernel, iterations=2)
+    page_mask = cv2.morphologyEx(page_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    page_mask = cv2.morphologyEx(page_mask, cv2.MORPH_OPEN, kernel, iterations=2)
 
     # Find largest contour (skip whole-frame detections)
-    contours, _ = cv2.findContours(page, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(
+        page_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
     best = None
@@ -218,27 +134,24 @@ def detect_page_quad(img):
             break
 
     if best is None:
-        return None
+        # Fallback: return center 80%
+        mx, my = int(w * 0.1), int(h * 0.1)
+        return img[my : h - my, mx : w - mx], "grabcut_fallback"
 
-    # Rotated rectangle, scaled back to original image coordinates
-    box = cv2.boxPoints(cv2.minAreaRect(best)).astype(np.float32) / scale
-    return order_points(box)
+    # Get rotated rectangle
+    rect = cv2.minAreaRect(best)
+    box = cv2.boxPoints(rect).astype(np.float32)
 
+    # Scale corners back to original image coordinates
+    box_orig = box / scale
 
-def crop_to_quad(img, quad, padding_pct=0.01):
-    """Perspective-straighten the page bounded by ``quad`` into a rectangle.
-
-    ``quad`` is an ordered ``(tl, tr, br, bl)`` array in image pixels — either a
-    detector result or a Phase-4 manual override. The quad is expanded outward
-    by ``padding_pct`` (so edges aren't clipped) and warped to a straight,
-    axis-aligned rectangle.
-    """
-    ordered = order_points(np.asarray(quad, dtype=np.float32))
+    # Order the corners
+    ordered = order_points(box_orig)
     tl, tr, br, bl = ordered
 
-    # Output dimensions from the quad's side lengths
-    out_w = max(1, int(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl))))
-    out_h = max(1, int(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr))))
+    # Compute output dimensions
+    out_w = int(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))
+    out_h = int(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))
 
     # Add safety padding to avoid clipping edges
     pad_x = int(out_w * padding_pct)
@@ -251,14 +164,17 @@ def crop_to_quad(img, quad, padding_pct=0.01):
         direction = ordered[i] - center
         length = np.linalg.norm(direction)
         if length > 0:
-            padded[i] = ordered[i] + (direction / length) * max(pad_x, pad_y)
+            direction = direction / length
+            padded[i] = ordered[i] + direction * max(pad_x, pad_y)
 
-    # Perspective transform to straighten the page. The source quad may poke
-    # past the frame (a manual box drawn to the image edge, or the padding
-    # expansion): clamping its corners would squish the content, so instead
-    # let the warp sample out-of-bounds pixels and fill them with white.
+    # Clamp to image bounds
+    padded[:, 0] = np.clip(padded[:, 0], 0, w - 1)
+    padded[:, 1] = np.clip(padded[:, 1], 0, h - 1)
+
+    # Perspective transform to straighten the page
     out_w_padded = out_w + 2 * pad_x
     out_h_padded = out_h + 2 * pad_y
+
     dst = np.array(
         [
             [0, 0],
@@ -268,29 +184,11 @@ def crop_to_quad(img, quad, padding_pct=0.01):
         ],
         dtype=np.float32,
     )
+
     M = cv2.getPerspectiveTransform(padded, dst)
-    return cv2.warpPerspective(
-        img,
-        M,
-        (out_w_padded, out_h_padded),
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(255, 255, 255),
-    )
+    warped = cv2.warpPerspective(img, M, (out_w_padded, out_h_padded))
 
-
-def crop_single_page(img, padding_pct=0.01):
-    """Auto-crop a single loose document: detect the page, then straighten it.
-
-    Detects the document against the table (handling rotation) and applies
-    perspective correction to produce a straight rectangle. Falls back to the
-    center 80% when no confident page region is found.
-    """
-    quad = detect_page_quad(img)
-    if quad is None:
-        h, w = img.shape[:2]
-        mx, my = int(w * 0.1), int(h * 0.1)
-        return img[my : h - my, mx : w - mx], "grabcut_fallback"
-    return crop_to_quad(img, quad, padding_pct), "grabcut"
+    return warped, "grabcut"
 
 
 # ── Main ─────────────────────────────────────────────────────
@@ -309,12 +207,8 @@ def main():
     parser.add_argument(
         "--safety-margin",
         type=float,
-        default=DEFAULT_SAFETY_MARGIN,
-        help="Default breathing room around the auto-detected spread for double "
-        f"mode, as a fraction of the frame (default: {DEFAULT_SAFETY_MARGIN}). "
-        "Only used on frames without a manual crop box (crop_quad, drawn with G "
-        "in Phase 4); a legacy per-keyframe crop_margin override still takes "
-        "precedence over this default.",
+        default=0.005,
+        help="Otsu safety margin for double mode (default: 0.005)",
     )
     parser.add_argument(
         "--padding",
@@ -351,7 +245,6 @@ def main():
 
     # Load crop bounds from review (for double mode side trim)
     global_crop = None
-    consensus = None
     if args.mode == "double":
         rl_path = paths.json / "review_log.json"
         if rl_path.exists():
@@ -364,15 +257,6 @@ def main():
             log(
                 f"  Crop bounds: L={global_crop['left']:.1%}, R={global_crop['right']:.1%}"
             )
-        # The default box for frames with no manual correction in effect. One
-        # box fits the session (the rig is static), and voting it across
-        # frames is far steadier than re-detecting per frame.
-        consensus = consensus_geometry(
-            paths.images, keyframes,
-            cache_path=paths.json / "consensus_geometry.json", log_fn=log,
-        )
-        if consensus:
-            log(f"  Consensus box: {consensus['quad']}")
 
     log("")
     t0 = time.time()
@@ -391,76 +275,26 @@ def main():
         is_cover = kf.get("is_cover", False)
 
         if args.mode == "single":
-            # Single-page: a Phase-4 manual crop override (4 corners as
-            # fractions of the frame) wins; otherwise GrabCut auto-detection.
-            quad = kf.get("crop_quad")
-            if quad:
-                h_img, w_img = img.shape[:2]
-                quad_px = np.array(
-                    [[p[0] * w_img, p[1] * h_img] for p in quad], dtype=np.float32
-                )
-                cropped = crop_to_quad(img, quad_px, args.padding)
-                method = "manual_quad"
-            else:
-                cropped, method = crop_single_page(img, args.padding)
+            cropped, method = crop_single_page(img, args.padding)
 
         else:
-            # Double-page. The frame's own manual box from Phase-4 review
-            # wins outright: drawn on the raw frame, it encodes position,
-            # size, and tilt at once. Next comes the boundary tracker's box
-            # (crop_quad_track, stamped at Phase-4 save): the nearest
-            # earlier correction translated to follow the book on this
-            # frame, so the crop rides along when the book drifts. A frame
-            # the tracker never reached falls back to that correction
-            # verbatim, and with no correction at all the session's
-            # consensus box applies — same box on every frame, so the
-            # output is steady instead of flickering with each frame's
-            # detection quirks.
-            quad, method = None, "manual_quad"
-            if not is_cover:
-                quad = kf.get("crop_quad")
-                if quad is None:
-                    quad = kf.get("crop_quad_track")
-                    method = "tracked_quad"
-                if quad is None:
-                    quad = resolve_crop_quad(keyframes, i)
-                    method = "inherited_quad"
-            if quad is None and not is_cover and consensus:
-                quad = consensus["quad"]
-                method = "consensus_quad"
-            if quad is not None:
+            # Double-page: crop bounds + Otsu
+            # Step 1: Apply side crop bounds
+            crop = kf.get("crop_bounds") or global_crop
+            if crop:
                 h_img, w_img = img.shape[:2]
-                quad_px = np.array(
-                    [[p[0] * w_img, p[1] * h_img] for p in quad], dtype=np.float32
-                )
-                cropped = crop_to_quad(img, quad_px, 0.0)
-            else:
-                # Auto path: crop bounds + page-mask detection
-                # Step 1: Apply side crop bounds
-                crop = kf.get("crop_bounds") or global_crop
-                if crop and not is_cover:
-                    h_img, w_img = img.shape[:2]
-                    img = img[
-                        :, int(w_img * crop["left"]) : int(w_img * crop["right"])
-                    ]
+                img = img[:, int(w_img * crop["left"]) : int(w_img * crop["right"])]
 
-                # Step 2: Otsu page detection
-                if not args.no_otsu and not is_cover:
-                    # Manual deskew corrections propagate forward to later
-                    # spreads (the rig doesn't move between page turns). A
-                    # per-spread crop margin (legacy override from older review
-                    # sessions) is a one-off, so it does NOT propagate.
-                    rot = resolve_rotation(keyframes, i)
-                    margin = kf.get("crop_margin", args.safety_margin)
-                    cropped, method, _ = crop_double_page(img, margin, rot)
-                else:
-                    cropped = img
-                    method = "bounds_only" if crop else "none"
+            # Step 2: Otsu page detection
+            if not args.no_otsu:
+                cropped, method = crop_double_page(img, args.safety_margin)
+            else:
+                cropped = img
+                method = "bounds_only" if crop else "none"
 
         method_counts[method] = method_counts.get(method, 0) + 1
 
-        # Save in-place. High-quality JPEG: this is the binarizer's eventual
-        # source, so keep one near-lossless generation rather than stacking many.
+        # Save in-place
         cv2.imwrite(
             str(img_path), cropped, [cv2.IMWRITE_JPEG_QUALITY, args.jpeg_quality]
         )

@@ -10,8 +10,9 @@ import numpy as np
 from pathlib import Path
 
 
-def split_at_gutter(img: np.ndarray,
-                     gutter_pct: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
+def split_at_gutter(
+    img: np.ndarray, gutter_pct: float = 0.5
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Split image at the gutter position.
 
@@ -27,11 +28,15 @@ def split_at_gutter(img: np.ndarray,
     return img[:, :split_x], img[:, split_x:]
 
 
-def split_all_pages(keyframes: list[dict], images_dir: Path,
-                     output_dir: Path, mode: str = "double",
-                     gutter_pct: float = 0.5,
-                     jpeg_quality: int = 92,
-                     on_progress=None) -> list[dict]:
+def split_all_pages(
+    keyframes: list[dict],
+    images_dir: Path,
+    output_dir: Path,
+    mode: str = "double",
+    gutter_pct: float = 0.5,
+    jpeg_quality: int = 92,
+    on_progress=None,
+) -> list[dict]:
     """
     Split all keyframes into individual pages.
 
@@ -48,6 +53,7 @@ def split_all_pages(keyframes: list[dict], images_dir: Path,
         list of page metadata dicts
     """
     import shutil
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     page_list = []
@@ -65,48 +71,63 @@ def split_all_pages(keyframes: list[dict], images_dir: Path,
             page_num += 1
             fn = f"frame{frame_idx:06d}_page.jpg"
             shutil.copy2(img_path, output_dir / fn)
-            page_list.append({
-                "page_num": page_num,
-                "type": "page",
-                "filename": fn,
-                "source": kf["filename"],
-            })
+            page_list.append(
+                {
+                    "page_num": page_num,
+                    "type": "page",
+                    "filename": fn,
+                    "source": kf["filename"],
+                }
+            )
 
         elif is_cover:
-            is_last = (kf is keyframes[-1])
+            is_last = kf is keyframes[-1]
             ctype = "backcover" if is_last else "cover"
             page_num += 1
             fn = f"frame{frame_idx:06d}_{ctype}.jpg"
             img = cv2.imread(str(img_path))
-            cv2.imwrite(str(output_dir / fn), img,
-                        [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
-            page_list.append({
-                "page_num": page_num,
-                "type": ctype,
-                "filename": fn,
-                "source": kf["filename"],
-            })
+            cv2.imwrite(
+                str(output_dir / fn), img, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
+            )
+            page_list.append(
+                {
+                    "page_num": page_num,
+                    "type": ctype,
+                    "filename": fn,
+                    "source": kf["filename"],
+                }
+            )
 
         else:
             img = cv2.imread(str(img_path))
             if img is None:
                 continue
 
-            # Use per-frame gutter if available, otherwise global
-            g = kf.get("gutter_pct", gutter_pct)
+            # Use per-frame gutter if set, otherwise walk backward, otherwise global default
+            g = kf.get("gutter_pct")
+            if g is None:
+                for prev in reversed(keyframes[:i]):
+                    if prev.get("gutter_pct") is not None:
+                        g = prev["gutter_pct"]
+                        break
+            if g is None:
+                g = gutter_pct
             left, right = split_at_gutter(img, g)
 
             for side, half in [("left", left), ("right", right)]:
                 page_num += 1
                 fn = f"frame{frame_idx:06d}_{side}.jpg"
-                cv2.imwrite(str(output_dir / fn), half,
-                            [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
-                page_list.append({
-                    "page_num": page_num,
-                    "type": side,
-                    "filename": fn,
-                    "source": kf["filename"],
-                })
+                cv2.imwrite(
+                    str(output_dir / fn), half, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
+                )
+                page_list.append(
+                    {
+                        "page_num": page_num,
+                        "type": side,
+                        "filename": fn,
+                        "source": kf["filename"],
+                    }
+                )
 
         if on_progress:
             on_progress(i + 1, len(keyframes))

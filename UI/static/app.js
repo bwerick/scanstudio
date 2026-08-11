@@ -215,7 +215,15 @@ async function runKeyframes() {
 
 /* ── Review View ─────────────────────────────────────────── */
 
-function loadReview() {
+async function loadReview() {
+    // Restore saved labels from server
+    try {
+        const labels = await api(`/api/keyframes/${state.project}/labels`);
+        state.labels = labels || {};
+    } catch (e) {
+        state.labels = {};
+    }
+
     updateReviewStats();
     toggleView(state.reviewView);
 
@@ -253,6 +261,12 @@ function updateReviewStats() {
 }
 
 // Grid
+function updateGridSize(val) {
+    document.getElementById('grid-size-val').textContent = val;
+    const grid = document.getElementById('review-grid');
+    grid.style.gridTemplateColumns = `repeat(${val}, 1fr)`;
+}
+
 function renderGrid() {
     const grid = document.getElementById('review-grid');
     grid.innerHTML = state.keyframes.map((kf, i) => {
@@ -295,6 +309,17 @@ function quadNext() {
 let gutterDragging = false;
 let gutterEditing = false;
 
+function getEffectiveGutter(idx) {
+    // If this frame has its own gutter, use it
+    const kf = state.keyframes[idx];
+    if (kf.gutter_pct != null) return kf.gutter_pct;
+    // Walk backward to find the most recent frame with a gutter set
+    for (let i = idx - 1; i >= 0; i--) {
+        if (state.keyframes[i].gutter_pct != null) return state.keyframes[i].gutter_pct;
+    }
+    return 0.5; // default
+}
+
 function renderSingle() {
     const kf = state.keyframes[state.singleIdx];
     if (!kf) return;
@@ -316,9 +341,10 @@ function renderSingle() {
 
         // Draw gutter line if double mode
         if (state.mode === 'double') {
-            const gutter = kf.gutter_pct || 0.5;
+            const gutter = getEffectiveGutter(state.singleIdx);
+            const isOwn = kf.gutter_pct != null;
             const x = canvas.width * gutter;
-            ctx.strokeStyle = gutterEditing ? '#00ffff' : '#ff3333';
+            ctx.strokeStyle = gutterEditing ? '#00ffff' : (isOwn ? '#ff3333' : '#ff333388');
             ctx.lineWidth = gutterEditing ? 3 : 1;
             ctx.setLineDash(gutterEditing ? [] : [6, 4]);
             ctx.beginPath();
@@ -328,12 +354,18 @@ function renderSingle() {
             ctx.setLineDash([]);
 
             // Gutter label
+            const source = isOwn ? 'set here' : 'inherited';
             if (gutterEditing) {
                 ctx.fillStyle = '#00ffff';
                 ctx.font = '12px monospace';
                 ctx.textAlign = 'center';
                 ctx.fillText(`Gutter: ${(gutter * 100).toFixed(1)}%`, x, canvas.height * 0.02 - 4);
                 ctx.fillText('Click to place · ←/→ fine-tune · Enter to confirm · Esc to cancel', canvas.width / 2, canvas.height - 8);
+            } else if (state.mode === 'double') {
+                ctx.fillStyle = isOwn ? '#ff3333' : '#ff333388';
+                ctx.font = '10px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(`${(gutter * 100).toFixed(1)}% (${source})`, x, canvas.height * 0.02 - 4);
             }
         }
     };
@@ -415,6 +447,24 @@ function labelFrame(label) {
     }
     updateReviewStats();
     renderSingle();
+    saveLabelsToServer();
+}
+
+async function saveLabelsToServer() {
+    await api(`/api/keyframes/${state.project}/labels`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(state.labels),
+    });
+}
+
+async function loadLabelsFromServer() {
+    try {
+        const labels = await api(`/api/keyframes/${state.project}/labels`);
+        state.labels = labels || {};
+    } catch (e) {
+        state.labels = {};
+    }
 }
 
 function labelColor(label) {
@@ -524,7 +574,6 @@ function cropPrev() { if (cropIdx > 0) { cropIdx--; renderCrop(); } }
 function cropNext() { if (cropIdx < state.keyframes.length - 1) { cropIdx++; renderCrop(); } }
 
 async function applyCropAll() {
-    // Run split
     const result = await api('/api/process/split', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -534,10 +583,27 @@ async function applyCropAll() {
     navigate('export');
     document.getElementById('export-status').textContent =
         `${result.pages} pages ready.`;
+    loadExportThumbs();
 }
 
 
 /* ── Export ───────────────────────────────────────────────── */
+
+async function loadExportThumbs() {
+    try {
+        const pages = await api(`/api/pages/${state.project}`);
+        const container = document.getElementById('export-thumbs');
+        container.innerHTML = pages.map(pg => `
+            <div class="export-thumb">
+                <img src="/pages/${state.project}/${pg.filename}" loading="lazy"
+                     title="Page ${pg.page_num} (${pg.type})">
+            </div>
+        `).join('');
+    } catch (e) {
+        document.getElementById('export-thumbs').innerHTML =
+            '<p class="muted">Could not load page thumbnails</p>';
+    }
+}
 
 async function buildPdf() {
     const bw = document.getElementById('export-bw').checked;
@@ -557,8 +623,19 @@ async function buildPdf() {
 /* ── Keyboard shortcuts ──────────────────────────────────── */
 
 document.addEventListener('keydown', (e) => {
-    if (state.currentView !== 'review' || state.reviewView !== 'single') return;
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+    // Crop view navigation
+    if (state.currentView === 'crop') {
+        switch (e.key) {
+            case 'ArrowRight': case 'd': cropNext(); e.preventDefault(); break;
+            case 'ArrowLeft': case 'a': cropPrev(); e.preventDefault(); break;
+        }
+        return;
+    }
+
+    // Review view
+    if (state.currentView !== 'review' || state.reviewView !== 'single') return;
 
     const scrubberOpen = document.getElementById('scrubber-modal').style.display === 'flex';
 
