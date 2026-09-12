@@ -250,13 +250,22 @@ ffmpeg:
 install-legacy: $(VENV)
 	$(PYTHON) -m pip install -r requirements-legacy.txt
 
-# Create the project venv on demand with the system python3. Only used when
-# PYTHON is the default .venv/bin/python (see VENV above); no-op if it exists.
-# On Debian/Ubuntu the venv module is a separate package, so a bare failure
-# here is usually a missing python3-venv rather than a broken Python.
+# Create the project venv on demand. macOS's bundled Python is often old and
+# linked against LibreSSL, which urllib3 2.x does not support; Homebrew Python
+# provides a current interpreter linked against OpenSSL. On Debian/Ubuntu the
+# venv module is a separate package, so a bare failure there is usually a
+# missing python3-venv rather than a broken Python.
 .venv/bin/python:
-	@echo "Creating .venv with $$(command -v python3)..."
-	@python3 -m venv .venv || { \
+	@set -e; \
+	bootstrap_python="$$(command -v python3)"; \
+	if [ "$$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then \
+		echo "Installing or updating Homebrew Python..."; \
+		brew install python; \
+		bootstrap_python="$$(brew --prefix python)/bin/python3"; \
+	fi; \
+	"$$bootstrap_python" -c "import sys; assert sys.version_info >= (3, 10), 'Python 3.10+ is required'"; \
+	echo "Creating .venv with $$bootstrap_python..."; \
+	"$$bootstrap_python" -m venv .venv || { \
 		echo "Could not create the venv."; \
 		command -v apt-get >/dev/null 2>&1 && \
 			echo "On Debian/Ubuntu: sudo apt-get install -y python3-venv"; \

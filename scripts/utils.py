@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Optional, Union
 
 import cv2
 import numpy as np
@@ -66,7 +67,7 @@ def backend_name(backend) -> str:
             cv2.CAP_ANY: "DEFAULT"}.get(backend, str(backend))
 
 
-def prepare_capture(cap, want_w: int, want_h: int, fps: float | None = None):
+def prepare_capture(cap, want_w: int, want_h: int, fps: Optional[float] = None):
     """Ask an open capture for ``want_w``x``want_h`` (and optionally fps).
 
     Order matters on V4L2: most UVC cameras offer 4K only as MJPG and default
@@ -209,7 +210,7 @@ def log(msg: str):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
 
-def derive_output_dir(video_path: str, output_dir_override: str | None = None) -> Path:
+def derive_output_dir(video_path: str, output_dir_override: Optional[str] = None) -> Path:
     """
     Derive the per-video output directory from the video filename.
     recordings/foo.mp4 → output/foo/
@@ -223,7 +224,7 @@ def derive_output_dir(video_path: str, output_dir_override: str | None = None) -
 class ProjectPaths:
     """Standardized paths for a video project's output."""
 
-    def __init__(self, output_dir: str | Path):
+    def __init__(self, output_dir: Union[str, Path]):
         self.base = Path(output_dir)
         self.images = self.base / "images"
         self.pages = self.base / "pages"
@@ -408,7 +409,7 @@ def page_mask_robust(img):
     return m2 if m2 is not None and _mask_plausible(m2) else mask
 
 
-def book_center_x(mask) -> float | None:
+def book_center_x(mask) -> Optional[float]:
     """Fraction (0–1) of the book's horizontal centre from a page mask.
 
     The mean of the left and right page edges, taken row by row and reduced by
@@ -428,7 +429,7 @@ def book_center_x(mask) -> float | None:
     return float(np.median(mids)) / w
 
 
-def detect_gutter(spread, mask=None, prior: float | None = None) -> int:
+def detect_gutter(spread, mask=None, prior: Optional[float] = None) -> int:
     """Return the x of the book gutter (spine) in a cropped spread.
 
     A bound book's two pages are equal width, so the spine sits at the book's
@@ -975,7 +976,7 @@ def text_skew(page, max_deg: float = 3.0) -> float:
 # pages.json to know where each document begins.
 
 
-def slugify(text: str | None, max_len: int = 40) -> str:
+def slugify(text: Optional[str], max_len: int = 40) -> str:
     """Filename-safe slug from a free-text title ('' when there's nothing)."""
     first = (text or "").strip().splitlines()[0] if (text or "").strip() else ""
     return re.sub(r"[^a-z0-9]+", "-", first.lower()).strip("-")[:max_len].strip("-")

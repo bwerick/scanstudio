@@ -164,6 +164,17 @@ class PageReviewApp:
         ).pack(side="left", padx=4)
         self._button(
             nav,
+            self._toggle_drop,
+            text="X Drop",
+            font=mono(11),
+            bg="#1e293b",
+            fg="#ef4444",
+            relief="flat",
+            padx=16,
+            pady=4,
+        ).pack(side="left", padx=4)
+        self._button(
+            nav,
             self._toggle_doc_start,
             text="F First Page",
             font=mono(11),
