@@ -12,8 +12,10 @@ Beyond creating PDFs, the project also explores how modern AI tools can be used 
 
 - Began honors thesis research under Dr. Rolando Garcia and Dr. Ross Maciejewski.
 - Researched existing work in book digitization, OCR, and document processing.
+<!-- TODO: Related Works, Background, Literature Review (one section) of your honors thesis. -->
 - Learned the ScanStudio codebase and gained an understanding of the current digitization pipeline.
 - Evaluated the existing workflow and identified areas where the pipeline could become more automated, reliable, and scalable.
+<!-- TODO: Can you think about charts, tables, or experiments to include? This would be great for evaluation. -->
 
 ### Summer 2026
 
@@ -25,6 +27,10 @@ Beyond creating PDFs, the project also explores how modern AI tools can be used 
 ### Fall 2026
 
 - Continue developing and improving the ScanStudio pipeline.
+<!-- TODO: Let's break this down into sub-points, finer grained planning. Which part of the pipeline to focus on.-->
 - Implement and test enhancements to the video to PDF workflow.
+<!-- More charts -->
 - Evaluate the effectiveness of the improvements using sample book scans.
+<!-- HCI: What are the computational benefits of human reading comprehension? -->
 - Complete the written honors thesis and present the final results.
+<!-- This can be developed in LaTex in this repo through the semester. -->
