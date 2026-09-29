@@ -13,8 +13,11 @@
             <span class="brand-icon">📖</span>
             <span class="brand-text">ScanStudio</span>
         </div>
+        <button id="nav-back" class="nav-back" onclick="goBack()" style="display:none">← Back</button>
         <div id="nav-breadcrumbs" class="nav-crumbs"></div>
         <div class="nav-right">
+            <button id="nav-analysis" class="nav-back" onclick="openAnalysis()"
+                    style="display:none">Analysis</button>
             <span id="nav-project" class="nav-project"></span>
         </div>
     </nav>
@@ -27,6 +30,18 @@
             <div class="home-container">
                 <h1>ScanStudio</h1>
                 <p class="subtitle">Video-to-PDF Book Scanner</p>
+
+                <!-- Record live -->
+                <section class="card live-card" onclick="openLiveSetup()">
+                    <div class="live-card-body">
+                        <div class="live-dot"></div>
+                        <div>
+                            <div class="live-card-title">Record Live</div>
+                            <div class="muted">Capture a book with the camera — keyframes are picked as you turn pages</div>
+                        </div>
+                        <div class="live-card-arrow">→</div>
+                    </div>
+                </section>
 
                 <!-- New project -->
                 <section class="card">
@@ -92,9 +107,9 @@
                 <div id="review-quad" class="review-quad" style="display:none">
                     <div class="quad-grid" id="quad-images"></div>
                     <div class="quad-nav">
-                        <button class="btn" onclick="quadPrev()">← Prev 4</button>
+                        <button class="btn" onclick="quadPrev()">← Prev (A)</button>
                         <span id="quad-counter"></span>
-                        <button class="btn" onclick="quadNext()">Next 4 →</button>
+                        <button class="btn" onclick="quadNext()">Next (D) →</button>
                     </div>
                 </div>
 
@@ -133,8 +148,8 @@
                 <h2>Crop & Split Preview</h2>
                 <div class="crop-preview">
                     <div>
-                        <h3>Original</h3>
-                        <img id="crop-original-img">
+                        <h3>Original <span class="crop-hint" id="crop-hint"></span></h3>
+                        <canvas id="crop-canvas"></canvas>
                     </div>
                     <div>
                         <h3>Cropped</h3>
@@ -145,7 +160,11 @@
                     <button class="btn" onclick="cropPrev()">← Prev (A)</button>
                     <span class="crop-counter" id="crop-counter"></span>
                     <button class="btn" onclick="cropNext()">Next (D) →</button>
-                    <button class="btn btn-primary" onclick="applyCropAll()" style="margin-left:24px">Apply to All & Continue →</button>
+                    <button class="btn btn-sm" id="crop-edit-btn" onclick="toggleCropEdit()">E — Edit Crop</button>
+                    <button class="btn btn-sm" onclick="resetCropRect()">R — Reset</button>
+                    <button class="btn btn-sm" onclick="restoreOriginals()" title="Re-extract every frame from the video">↺ Restore originals</button>
+                    <span class="crop-source" id="crop-source"></span>
+                    <button class="btn btn-primary" onclick="applyCropAll()" style="margin-left:20px">Apply to All & Continue →</button>
                 </div>
             </div>
         </div>
@@ -160,11 +179,131 @@
                             <input type="checkbox" id="export-bw"> Black & White
                         </label>
                         <button class="btn btn-primary" onclick="buildPdf()">Build PDF</button>
+                        <button class="btn" onclick="openAnalysis()">View Analysis</button>
                         <span id="export-status" class="muted"></span>
                     </div>
                 </div>
-                <div id="export-thumbs" class="export-thumbs"></div>
+                <div class="export-preview">
+                    <h3 class="export-preview-title">Preview <span class="muted" id="export-preview-count"></span></h3>
+                    <div id="export-thumbs" class="export-thumbs"></div>
+                </div>
+                <div id="export-summary" class="export-summary"></div>
             </div>
+            </div>
+        </div>
+
+        <!-- LIVE SETUP VIEW -->
+        <div id="view-live" class="view">
+            <div class="live-container">
+                <h2>Record Live</h2>
+                <p class="muted live-sub">Defaults suit an overhead 4K camera. The capture window opens in setup mode — nothing records until you press Enter there.</p>
+
+                <div class="live-form">
+                    <label class="field field-wide">
+                        <span>Name</span>
+                        <input id="live-name" type="text" spellcheck="false">
+                    </label>
+
+                    <label class="field">
+                        <span>Camera</span>
+                        <div class="field-row">
+                            <select id="live-camera"><option value="auto">Auto</option></select>
+                            <button class="btn btn-sm" onclick="probeCameras()" id="live-probe">Detect</button>
+                        </div>
+                    </label>
+
+                    <label class="field">
+                        <span>Resolution</span>
+                        <select id="live-resolution">
+                            <option value="3840x2160">4K · 3840×2160</option>
+                            <option value="2560x1440">1440p · 2560×1440</option>
+                            <option value="1920x1080">1080p · 1920×1080</option>
+                            <option value="1280x720">720p · 1280×720</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span>Frame rate</span>
+                        <select id="live-fps">
+                            <option value="30">30 fps</option>
+                            <option value="24">24 fps</option>
+                            <option value="60">60 fps</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span>Capture sound</span>
+                        <div class="field-row">
+                            <select id="live-sound">
+                                <option value="pluck">Pluck</option>
+                                <option value="chime">Chime</option>
+                                <option value="tick">Tick</option>
+                                <option value="off">Off</option>
+                            </select>
+                            <button class="btn btn-sm" onclick="previewSound()" title="Play">▶</button>
+                        </div>
+                    </label>
+
+                    <label class="field check">
+                        <input id="live-guide" type="checkbox" checked>
+                        <span>Center line on at start</span>
+                    </label>
+                </div>
+
+                <details class="live-advanced">
+                    <summary>Advanced</summary>
+                    <div class="live-form">
+                        <label class="field"><span>Settle threshold</span>
+                            <input id="live-settle" type="number" step="0.1" min="0.1"></label>
+                        <label class="field"><span>Turn threshold</span>
+                            <input id="live-turn" type="number" step="0.1" min="0.5"></label>
+                        <label class="field"><span>Settle time (s)</span>
+                            <input id="live-settle-time" type="number" step="0.05" min="0.1"></label>
+                        <label class="field"><span>Codec</span>
+                            <select id="live-codec">
+                                <option value="mp4v">mp4v — fast at 4K</option>
+                                <option value="avc1">H.264</option>
+                            </select></label>
+                        <label class="field"><span>Preview height</span>
+                            <input id="live-preview-h" type="number" step="60" min="360"></label>
+                        <label class="field"><span>Analysis height</span>
+                            <input id="live-analysis-h" type="number" step="60" min="180"></label>
+                        <label class="field"><span>Smoothing window</span>
+                            <input id="live-smoothing" type="number" step="1" min="1"></label>
+                        <label class="field"><span>JPEG quality</span>
+                            <input id="live-jpeg" type="number" step="1" min="60" max="100"></label>
+                    </div>
+                    <button class="btn btn-sm" onclick="resetLiveDefaults()">Restore defaults</button>
+                </details>
+
+                <div class="live-actions">
+                    <span id="live-error" class="live-error"></span>
+                    <button class="btn btn-primary" onclick="startLive()">Open capture window →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- LIVE RUNNING VIEW -->
+        <div id="view-live-run" class="view">
+            <div class="live-container live-run">
+                <div class="live-phase" id="live-phase">Opening camera…</div>
+                <div class="live-count"><span id="live-count">0</span><small>captured</small></div>
+                <div class="muted" id="live-meta"></div>
+                <div class="live-instructions" id="live-instructions">
+                    The capture window is open on your desktop.<br>
+                    Frame the book and press <kbd>Enter</kbd> there to start ·
+                    <kbd>Q</kbd> to finish · <kbd>H</kbd> for keys
+                </div>
+                <div class="live-actions center" id="live-run-actions"></div>
+            </div>
+        </div>
+
+        <!-- ANALYSIS VIEW -->
+        <div id="view-analysis" class="view">
+            <div class="analysis-container">
+                <h2>Analysis</h2>
+                <div id="analysis-stats" class="analysis-stats"></div>
+                <div id="analysis-plots" class="analysis-plots"></div>
             </div>
         </div>
 
