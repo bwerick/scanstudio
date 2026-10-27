@@ -655,9 +655,17 @@ class ReviewApp:
         m = kf.get("motion_value", 0)
         mc = "#22c55e" if m < 2.0 else "#f59e0b" if m < 3.0 else "#ef4444"
         validated = "  |  ✓ validated" if idx in self.validated else ""
+        quality_flags = kf.get("quality_flags", [])
+        quality_hint = ""
+        if quality_flags:
+            match = quality_flags[0].get("matches_filename", "an earlier frame")
+            quality_hint = f"  |  AUTO: likely duplicate of {match}"
         self.lbl_detail.config(
-            text=f"Motion: {m:.2f}  |  Sharp: {kf.get('sharpness',0):.0f}  |  Src: {kf.get('source','?')}{validated}",
-            fg=mc,
+            text=(
+                f"Motion: {m:.2f}  |  Sharp: {kf.get('sharpness',0):.0f}  |  "
+                f"Src: {kf.get('source','?')}{quality_hint}{validated}"
+            ),
+            fg="#f59e0b" if quality_flags else mc,
         )
 
         self.lbl_counter.config(text=f"{idx+1} / {len(self.keyframes)}")
@@ -690,9 +698,10 @@ class ReviewApp:
             self.canvas.delete("all")
 
             action = self.actions.get(idx)
+            ix0, iy0 = (cw - dw) // 2, (ch - dh) // 2
             if action and action in ACTIONS:
-                x0 = (cw - dw) // 2 - 3
-                y0 = (ch - dh) // 2 - 3
+                x0 = ix0 - 3
+                y0 = iy0 - 3
                 self.canvas.create_rectangle(
                     x0,
                     y0,
@@ -706,7 +715,24 @@ class ReviewApp:
                 cw // 2, ch // 2, image=self.photo, anchor="center"
             )
 
-            ix0, iy0 = (cw - dw) // 2, (ch - dh) // 2
+            if quality_flags and not action:
+                self.canvas.create_rectangle(
+                    ix0 - 3,
+                    iy0 - 3,
+                    ix0 + dw + 3,
+                    iy0 + dh + 3,
+                    outline="#f59e0b",
+                    width=3,
+                )
+                self.canvas.create_text(
+                    ix0 + 8,
+                    iy0 + 8,
+                    anchor="nw",
+                    text="AUTO: POSSIBLE DUPLICATE",
+                    fill="#f59e0b",
+                    font=mono(10, "bold"),
+                )
+
             if self.show_center_guide:
                 cx = ix0 + dw // 2
                 self.canvas.create_line(

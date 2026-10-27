@@ -25,7 +25,11 @@ make install
 make all VIDEO=recordings/mybook.mp4
 ```
 
-Either way, the pipeline pauses twice for interactive review (P4 and P7), and the finished PDF lands at `output/mybook/pdf/mybook.pdf`.
+Either way, the pipeline flags likely duplicate keyframes before P4, pauses twice for interactive review (P4 and P7), and writes the finished PDF to `output/mybook/pdf/mybook.pdf`.
+
+### Live-capture test observations
+
+Three recordings of the same book were run end-to-end, from frame inspection through PDF export. The first pass contained many repetitive captures; capture setup and operator practice reduced them in the second and third passes, and the third PDF had the best page alignment. These trials motivated P3.5: it calls attention to likely repeated captures while keeping the reviewer—not an automatic heuristic—in control of deletion.
 
 ## Overview
 
@@ -37,6 +41,7 @@ A scan flows through numbered phases. The front end produces a recording plus ke
 | P1 | Motion Signal | Automated |
 | P2 | Detect Peaks | Automated |
 | P3 | Select Keyframes | Automated |
+| P3.5 | Frame Quality Flags | Automated, advisory |
 | P4 | Review Keyframes | **Interactive** |
 | P5 | Crop | Automated |
 | P6 | Split Pages | Automated |
@@ -146,6 +151,7 @@ Most targets require `VIDEO=path/to/file.mp4`. The exception is `make live`, whi
 | `make motion VIDEO=...` | P1: Compute motion signal |
 | `make peaks VIDEO=...` | P2: Detect page-turn peaks |
 | `make keyframes VIDEO=...` | P3: Extract keyframe images |
+| `make quality VIDEO=...` | P3.5: Flag likely duplicate keyframes (advisory) |
 | `make review VIDEO=...` | P4: Review keyframes (GUI, reentrant) |
 | `make review-web VIDEO=...` | P4 in Chrome — same review, ChromeOS-friendly, `<video>` insert scrubber |
 | `make crop VIDEO=...` | P5: Crop keyframes |
@@ -230,6 +236,16 @@ make keyframes VIDEO=recordings/mybook.mp4
 
 For each detected spread, picks the lowest-motion frame (sharpness as tiebreaker). Extracts full-resolution images from the video into `images/` and writes `json/keyframes.json`.
 
+### P3.5 — Frame Quality Flags
+
+```bash
+make quality VIDEO=recordings/mybook.mp4
+```
+
+Compares each selected keyframe with its immediately preceding keyframe and flags likely duplicate captures. The image-only detector combines a small perceptual hash with a normalized pixel-difference check. It is deliberately conservative, but adjacent pages with extremely similar layouts can still be flagged. It writes `json/frame_quality.json` and annotates the affected entries in `json/keyframes.json`.
+
+This step is advisory: it never drops a frame. P4 shows an orange border and the matching filename for every possible duplicate; the reviewer decides whether to press `2` to delete it as a duplicate. A strong next step is targeted OCR of the page-number region (not full-page OCR) to separate similar-looking consecutive pages and report missing page ranges. Automatic occlusion detection is separate future work.
+
 ### P4 — Review Keyframes (interactive)
 
 ```bash
@@ -237,6 +253,8 @@ make review VIDEO=recordings/mybook.mp4
 ```
 
 Tkinter GUI for reviewing and correcting the keyframe selection. This phase is reentrant — run it as many times as needed before proceeding.
+
+Frames flagged by P3.5 show an orange `AUTO: POSSIBLE DUPLICATE` label. Check the two images and use `2` only when they are genuinely the same spread.
 
 Prefer the browser on ChromeOS (or any small screen): `make review-web VIDEO=...` serves the same review to Chrome at `http://localhost:8412` — identical state, keys, and save format, with the insert scrubber as a native `<video>` (hardware decode, instant seeking, vs. a software 4K decode per keypress in Tk). All ScanStudio web apps share port 8412 (they run serially), so the one ChromeOS forwarding rule from `live-web` already covers this.
 

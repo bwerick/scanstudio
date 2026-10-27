@@ -40,6 +40,7 @@ endif
 MOTION    := $(OUTDIR)/data/motion_signal.npy
 PEAKS     := $(OUTDIR)/data/peaks.npy
 KEYFRAMES := $(OUTDIR)/json/keyframes.json
+QUALITY    := $(OUTDIR)/json/frame_quality.json
 PAGES     := $(OUTDIR)/json/pages.json
 BW_META   := $(OUTDIR)/json/bw_metadata.json
 PDF       := $(OUTDIR)/pdf/$(NAME).pdf
@@ -72,7 +73,7 @@ PORT          ?= 8412
 VERBOSE       ?=
 VERBOSE_FLAG  := $(if $(strip $(VERBOSE)),--verbose,)
 
-.PHONY: all bw live live-web finish finish-web motion peaks keyframes review review-web crop split page-review page-review-web binarize pdf pdf-bw clean install install-legacy tkinter ffmpeg probe-camera test help
+.PHONY: all bw live live-web finish finish-web motion peaks keyframes quality review review-web crop split page-review page-review-web binarize pdf pdf-bw clean install install-legacy tkinter ffmpeg probe-camera test help
 
 help:
 	@echo "ScanStudio Pipeline"
@@ -90,6 +91,7 @@ help:
 	@echo "  motion        P1: Motion signal"
 	@echo "  peaks         P2: Detect peaks"
 	@echo "  keyframes     P3: Select keyframes"
+	@echo "  quality       P3.5: Flag likely duplicate keyframes"
 	@echo "  review        P4: Review keyframes (GUI, reentrant)"
 	@echo "  review-web    P4 in Chrome — ChromeOS-friendly, <video> insert scrubber"
 	@echo "  crop          P5: Crop keyframes"
@@ -170,14 +172,18 @@ keyframes: $(KEYFRAMES)
 $(KEYFRAMES): $(PEAKS)
 	$(PYTHON) $(SCRIPTS)/p3_select_keyframes.py $(OUTDIR) $(VIDEO)
 
-review: $(KEYFRAMES)
+quality: $(QUALITY)
+$(QUALITY): $(KEYFRAMES)
+	$(PYTHON) $(SCRIPTS)/p3_5_frame_quality.py $(OUTDIR)
+
+review: $(QUALITY)
 	$(PYTHON) $(SCRIPTS)/p4_review_keyframes.py $(OUTDIR) $(VIDEO) --mode $(MODE)
 
 # The same review served to Chrome (scripts/p4_web_review.py): identical
 # state and save format, browser rendering. The insert scrubber is a native
 # <video> over the recording — the ChromeOS path, where Tk clips off small
 # screens and software-decodes 4K per scrub step.
-review-web: $(KEYFRAMES)
+review-web: $(QUALITY)
 	$(PYTHON) $(SCRIPTS)/p4_web_review.py $(OUTDIR) $(VIDEO) --mode $(MODE) --port $(PORT)
 
 crop: $(KEYFRAMES)
