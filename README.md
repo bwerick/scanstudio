@@ -254,6 +254,8 @@ make review VIDEO=recordings/mybook.mp4
 
 Tkinter GUI for reviewing and correcting the keyframe selection. This phase is reentrant — run it as many times as needed before proceeding.
 
+When review is complete, press `⌘S` on macOS (`Ctrl+S` on Linux), dismiss the save confirmation, then close the review window to let `make` continue. Saving alone keeps the window open for further review.
+
 Frames flagged by P3.5 show an orange `AUTO: POSSIBLE DUPLICATE` label. Check the two images and use `2` only when they are genuinely the same spread.
 
 Prefer the browser on ChromeOS (or any small screen): `make review-web VIDEO=...` serves the same review to Chrome at `http://localhost:8412` — identical state, keys, and save format, with the insert scrubber as a native `<video>` (hardware decode, instant seeking, vs. a software 4K decode per keypress in Tk). All ScanStudio web apps share port 8412 (they run serially), so the one ChromeOS forwarding rule from `live-web` already covers this.
@@ -368,7 +370,7 @@ make all VIDEO=recordings/mybook.mp4 MODE=single SAFETY_MARGIN=0.01
 | `NAME` | *(required for `live`)* | Project name; `make live` records to `recordings/<NAME>.mp4` |
 | `MODE` | `double` | `double` for book spreads, `single` for loose documents |
 | `SPLIT_DOCS` | `auto` | `auto` also writes one PDF per document when review marked document starts; `never` writes only the combined PDF |
-| `SAFETY_MARGIN` | `0.005` | Crop safety margin as a fraction of image dimension |
+| `SAFETY_MARGIN` | `0.02` | Crop safety margin as a fraction of image dimension; matches the P4 preview default |
 | `BW_METHOD` | `sauvola` | Binarization method: `sauvola` or `adaptive` |
 | `BW_UPSCALE` | `2` | Grayscale upscale factor before thresholding (anti-aliases edges) |
 | `BW_K` | `0.2` | Sauvola threshold factor (higher = thinner strokes) |

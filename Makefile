@@ -47,7 +47,7 @@ PDF       := $(OUTDIR)/pdf/$(NAME).pdf
 PDF_BW    := $(OUTDIR)/pdf/$(NAME)_bw.pdf
 
 # Default parameters
-SAFETY_MARGIN ?= 0.005
+SAFETY_MARGIN ?= 0.02
 BLOCK_SIZE    ?= 51
 BW_OFFSET     ?= 10
 BW_METHOD     ?= sauvola
